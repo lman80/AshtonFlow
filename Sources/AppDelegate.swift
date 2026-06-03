@@ -1,0 +1,230 @@
+import SwiftUI
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+    let appState = AppState()
+    var setupWindow: NSWindow?
+    private var settingsWindow: NSWindow?
+    private var transcribeAudioWindow: NSWindow?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleShowSetup),
+            name: .showSetup,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleShowSettings),
+            name: .showSettings,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleShowTranscribeAudio),
+            name: .showTranscribeAudio,
+            object: nil
+        )
+
+        if !appState.hasCompletedSetup {
+            showSetupWindow()
+        } else {
+            appState.startHotkeyMonitoring()
+            appState.startAccessibilityPolling()
+            Task { @MainActor in
+                UpdateManager.shared.startPeriodicChecks()
+            }
+
+            if !AXIsProcessTrusted() {
+                appState.showAccessibilityAlert()
+            }
+        }
+
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard appState.hasCompletedSetup else { return true }
+        if !flag {
+            showSettingsWindow()
+        }
+        return true
+    }
+
+    @objc func handleShowSetup() {
+        // Single wizard at a time — opening a second leaks the first's
+        // willClose observer and breaks the bail-restore.
+        if let existing = setupWindow, existing.isVisible {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let wasCompleted = appState.hasCompletedSetup
+        appState.hasCompletedSetup = false
+        appState.stopAccessibilityPolling()
+        appState.stopHotkeyMonitoring()
+        showSetupWindow()
+
+        // Restore prior state if the user closes the wizard without completing.
+        // completeSetup() flips hasCompletedSetup back to true before window.close(),
+        // so the !hasCompletedSetup check below correctly skips the restore there.
+        if wasCompleted, let window = setupWindow {
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self = self else { return }
+                if !self.appState.hasCompletedSetup {
+                    self.appState.hasCompletedSetup = true
+                    self.appState.startHotkeyMonitoring()
+                    self.appState.startAccessibilityPolling()
+                    NSApp.setActivationPolicy(.accessory)
+                }
+                self.setupWindow = nil
+            }
+        }
+    }
+
+    @objc private func handleShowSettings() {
+        showSettingsWindow()
+    }
+
+    @objc private func handleShowTranscribeAudio() {
+        showTranscribeAudioWindow()
+    }
+
+    private func showTranscribeAudioWindow() {
+        NSApp.setActivationPolicy(.regular)
+
+        if let transcribeAudioWindow, transcribeAudioWindow.isVisible {
+            transcribeAudioWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let transcribeView = TranscribeAudioView()
+            .environmentObject(appState)
+        let hostingView = NSHostingView(rootView: transcribeView)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 520),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Transcribe Audio"
+        window.contentView = hostingView
+        window.isReleasedWhenClosed = false
+        window.minSize = NSSize(width: 460, height: 420)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        transcribeAudioWindow = window
+
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            if self?.setupWindow == nil && self?.settingsWindow == nil {
+                NSApp.setActivationPolicy(.accessory)
+            }
+            self?.transcribeAudioWindow = nil
+        }
+    }
+
+    private func showSettingsWindow() {
+        NSApp.setActivationPolicy(.regular)
+
+        if let settingsWindow, settingsWindow.isVisible {
+            settingsWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        if settingsWindow == nil {
+            presentSettingsWindow()
+        } else {
+            settingsWindow?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    private func presentSettingsWindow() {
+        let settingsView = SettingsView()
+            .environmentObject(appState)
+        let hostingView = NSHostingView(rootView: settingsView)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 780, height: 540),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = AppName.displayName
+        window.contentView = hostingView
+        window.isReleasedWhenClosed = false
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        settingsWindow = window
+
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            if self?.setupWindow == nil {
+                NSApp.setActivationPolicy(.accessory)
+            }
+            self?.settingsWindow = nil
+        }
+    }
+
+
+    func showSetupWindow() {
+        NSApp.setActivationPolicy(.regular)
+
+        let setupView = SetupView(onComplete: { [weak self] in
+            self?.completeSetup()
+        })
+        .environmentObject(appState)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 680),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = AppName.displayName
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.contentView = NSHostingView(rootView: setupView)
+        window.minSize = NSSize(width: 520, height: 680)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        window.isReleasedWhenClosed = false
+
+        self.setupWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func completeSetup() {
+        appState.hasCompletedSetup = true
+        setupWindow?.close()
+        setupWindow = nil
+        NSApp.setActivationPolicy(.accessory)
+        appState.startHotkeyMonitoring()
+        appState.startAccessibilityPolling()
+        Task { @MainActor in
+            UpdateManager.shared.startPeriodicChecks()
+        }
+
+        if !AXIsProcessTrusted() {
+            appState.showAccessibilityAlert()
+        }
+    }
+}
