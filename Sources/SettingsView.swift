@@ -324,53 +324,6 @@ struct ProviderSettingsFields: View {
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 8) {
-                Toggle("Offline mode (on-device transcription)", isOn: $appState.offlineModeEnabled)
-                Text("Transcribes entirely on your Mac with a local Whisper model, so dictation works with no internet. Transcription only — no AI rewrite. The model downloads once while you're online, then runs offline.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if appState.offlineModeEnabled {
-                    HStack(spacing: 8) {
-                        Text("Model")
-                            .font(.caption.weight(.semibold))
-                        Picker("Model", selection: $appState.offlineModelName) {
-                            ForEach(AppState.offlineModelOptions, id: \.self) { name in
-                                Text(name).tag(name)
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(maxWidth: 220)
-                    }
-
-                    HStack(spacing: 8) {
-                        switch appState.localModelState {
-                        case .notLoaded:
-                            Button("Download model") { appState.prepareLocalModel() }
-                                .controlSize(.small)
-                            Text("Needs internet once")
-                                .font(.caption).foregroundStyle(.secondary)
-                        case .preparing:
-                            ProgressView().controlSize(.small)
-                            Text("Preparing model…")
-                                .font(.caption).foregroundStyle(.secondary)
-                        case .ready:
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                            Text("Model ready — works offline")
-                                .font(.caption).foregroundStyle(.green)
-                        case .failed(let message):
-                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                            Text(message)
-                                .font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                            Button("Retry") { appState.prepareLocalModel() }
-                                .controlSize(.small)
-                        }
-                    }
-                }
-            }
-
-            Divider()
-
             Toggle(
                 "Stream audio while recording (realtime)",
                 isOn: $appState.realtimeStreamingEnabled
@@ -744,6 +697,9 @@ struct GeneralSettingsView: View {
                 SettingsCard("Updates", icon: "arrow.triangle.2.circlepath") {
                     updatesSection
                 }
+                SettingsCard("Offline Mode", icon: "wifi.slash") {
+                    offlineModeSection
+                }
                 SettingsCard("API Key", icon: "key.fill") {
                     apiKeySection
                 }
@@ -998,6 +954,58 @@ struct GeneralSettingsView: View {
     }
 
     // MARK: API Key
+
+    private var offlineModeSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle("Transcribe on this Mac (offline)", isOn: $appState.offlineModeEnabled)
+            Text("Transcribes entirely on your Mac with a local Whisper model, so dictation works with no internet. Transcription only — no AI rewrite. The model downloads once while you're online, then runs offline.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if appState.offlineModeEnabled {
+                Divider()
+
+                HStack(spacing: 8) {
+                    Text("Model")
+                        .font(.caption.weight(.semibold))
+                    Picker("Model", selection: $appState.offlineModelName) {
+                        ForEach(AppState.offlineModelOptions, id: \.self) { name in
+                            Text(name).tag(name)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 220)
+                }
+                Text("Larger models are more accurate but slower and bigger to download.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 8) {
+                    switch appState.localModelState {
+                    case .notLoaded:
+                        Button("Download model") { appState.prepareLocalModel() }
+                            .controlSize(.small)
+                        Text("Needs internet once")
+                            .font(.caption).foregroundStyle(.secondary)
+                    case .preparing:
+                        ProgressView().controlSize(.small)
+                        Text("Preparing model…")
+                            .font(.caption).foregroundStyle(.secondary)
+                    case .ready:
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        Text("Model ready — works offline")
+                            .font(.caption).foregroundStyle(.green)
+                    case .failed(let message):
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        Text(message)
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        Button("Retry") { appState.prepareLocalModel() }
+                            .controlSize(.small)
+                    }
+                }
+            }
+        }
+    }
 
     private var apiKeySection: some View {
         VStack(alignment: .leading, spacing: 10) {
