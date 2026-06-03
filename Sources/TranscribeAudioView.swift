@@ -177,8 +177,7 @@ struct TranscribeAudioView: View {
             if Task.isCancelled { preparedAudio.cleanup(); return }
 
             phase = .transcribing
-            let service = try appState.makeFileTranscriptionService()
-            let raw = try await service.transcribe(fileURL: preparedAudio.url)
+            let raw = try await appState.transcribeAudioFile(at: preparedAudio.url)
             if Task.isCancelled { preparedAudio.cleanup(); return }
 
             let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)

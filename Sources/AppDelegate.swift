@@ -31,6 +31,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             appState.startHotkeyMonitoring()
             appState.startAccessibilityPolling()
+            if appState.offlineModeEnabled {
+                appState.prepareLocalModel()
+            }
             Task { @MainActor in
                 UpdateManager.shared.startPeriodicChecks()
             }

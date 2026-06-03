@@ -221,6 +221,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let customContextPromptLastModifiedStorageKey = "custom_context_prompt_last_modified"
     private let contextScreenshotMaxDimensionStorageKey = "context_screenshot_max_dimension"
     private let screenRecordingEnabledStorageKey = "screen_recording_enabled"
+    private let offlineModeEnabledStorageKey = "offline_mode_enabled"
+    private let offlineModelNameStorageKey = "offline_model_name"
+    static let defaultOfflineModelName = "base"
+    static let offlineModelOptions = ["tiny", "base", "small", "large-v3-turbo"]
     private let shortcutStartDelayStorageKey = "shortcut_start_delay"
     private let preserveClipboardStorageKey = "preserve_clipboard"
     private let pressEnterVoiceCommandStorageKey = "press_enter_voice_command_enabled"
@@ -454,6 +458,40 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// When on, transcription runs fully on-device (offline) via WhisperKit
+    /// instead of the cloud API. Offline mode is transcription-only — no AI
+    /// rewrite and no cloud context — so it works with no internet connection.
+    @Published var offlineModeEnabled: Bool {
+        didSet {
+            guard oldValue != offlineModeEnabled else { return }
+            UserDefaults.standard.set(offlineModeEnabled, forKey: offlineModeEnabledStorageKey)
+            if offlineModeEnabled {
+                // Begin loading/downloading the model the moment it's turned on.
+                prepareLocalModel()
+            }
+        }
+    }
+
+    /// Which local Whisper model to use (see `offlineModelOptions`).
+    @Published var offlineModelName: String {
+        didSet {
+            let trimmed = offlineModelName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed != offlineModelName { offlineModelName = trimmed; return }
+            guard oldValue != offlineModelName else { return }
+            UserDefaults.standard.set(offlineModelName, forKey: offlineModelNameStorageKey)
+            localModelState = .notLoaded
+            let name = offlineModelName
+            Task { await localTranscriptionService.setModel(name) }
+            if offlineModeEnabled { prepareLocalModel() }
+        }
+    }
+
+    /// UI status of the local model load/download (shown in Settings).
+    @Published var localModelState: LocalModelState = .notLoaded
+
+    /// On-device transcription engine, used when `offlineModeEnabled` is on.
+    let localTranscriptionService: LocalTranscriptionService
+
     @Published var customSystemPromptLastModified: String {
         didSet {
             UserDefaults.standard.set(customSystemPromptLastModified, forKey: customSystemPromptLastModifiedStorageKey)
@@ -659,6 +697,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
             : Self.defaultContextScreenshotMaxDimension
         let contextScreenshotMaxDimension = Self.normalizedContextScreenshotMaxDimension(storedContextScreenshotMaxDimension)
         let screenRecordingEnabled = UserDefaults.standard.bool(forKey: screenRecordingEnabledStorageKey)
+        let offlineModeEnabled = UserDefaults.standard.bool(forKey: offlineModeEnabledStorageKey)
+        let storedOfflineModelName = UserDefaults.standard.string(forKey: offlineModelNameStorageKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let offlineModelName = storedOfflineModelName.isEmpty ? Self.defaultOfflineModelName : storedOfflineModelName
         let shortcutStartDelay = max(0, UserDefaults.standard.double(forKey: shortcutStartDelayStorageKey))
         let isCommandModeEnabled = UserDefaults.standard.object(forKey: commandModeEnabledStorageKey) == nil
             ? false
@@ -743,6 +785,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.customContextPrompt = customContextPrompt
         self.contextScreenshotMaxDimension = contextScreenshotMaxDimension
         self.screenRecordingEnabled = screenRecordingEnabled
+        self.offlineModeEnabled = offlineModeEnabled
+        self.offlineModelName = offlineModelName
+        self.localTranscriptionService = LocalTranscriptionService(modelName: offlineModelName)
         self.customSystemPromptLastModified = customSystemPromptLastModified
         self.customContextPromptLastModified = customContextPromptLastModified
         self.outputLanguage = outputLanguage
@@ -970,6 +1015,32 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private static func loadOptionalStoredAPIValue(account: String) -> String {
         let stored = AppSettingsStorage.load(account: account) ?? ""
         return stored.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Loads (downloading on first use) the local Whisper model, updating
+    /// `localModelState` for the UI. Triggered when Offline mode is turned on or
+    /// from the Settings "Download model" button.
+    func prepareLocalModel() {
+        localModelState = .preparing
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.localTranscriptionService.prepare()
+                await MainActor.run { self.localModelState = .ready }
+            } catch {
+                await MainActor.run { self.localModelState = .failed(error.localizedDescription) }
+            }
+        }
+    }
+
+    /// Transcribes a file, routing to the local engine when Offline mode is on,
+    /// otherwise the cloud service. Used by the Transcribe Audio window.
+    func transcribeAudioFile(at url: URL) async throws -> String {
+        if offlineModeEnabled {
+            return try await localTranscriptionService.transcribe(fileURL: url)
+        }
+        let service = try makeFileTranscriptionService()
+        return try await service.transcribe(fileURL: url)
     }
 
     private static func normalizeTranscriptionLanguage(_ language: String) -> String {
@@ -2287,7 +2358,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 os_log(.info, log: recordingLog, "audioRecorder.startRecording() done: %.3fms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)
                 DispatchQueue.main.async {
                     guard self.isRecording, self.activeRecordingTriggerMode != nil else { return }
-                    self.startContextCapture()
+                    // Skip cloud context inference offline (it needs the network).
+                    if !self.offlineModeEnabled {
+                        self.startContextCapture()
+                    }
                     self.audioLevelCancellable = self.audioRecorder.$audioLevel
                         .receive(on: DispatchQueue.main)
                         .sink { [weak self] level in
@@ -2462,9 +2536,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
         case postProcessingFailedFallback
         case commandModeSucceeded(invocation: CommandInvocation)
         case commandModeFailedFallback(invocation: CommandInvocation)
+        case skippedOffline
 
         func statusMessage(isRetry: Bool = false) -> String {
             switch self {
+            case .skippedOffline:
+                return "Offline mode: transcription only (no rewrite)"
             case .skippedEmptyRawTranscript:
                 return "Skipped macros and post-processing for empty raw transcript"
             case .voiceMacro(let command):
@@ -2496,6 +2573,15 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
         guard !trimmedRawTranscript.isEmpty else {
             return ("", .skippedEmptyRawTranscript, "")
+        }
+
+        // Offline mode is transcription-only: no cloud rewrite or edit-mode
+        // transform (those need the network). Local macros still apply below.
+        if offlineModeEnabled {
+            if let macro = findMatchingMacro(for: trimmedRawTranscript) {
+                return (macro.payload, .voiceMacro(command: macro.command), "")
+            }
+            return (trimmedRawTranscript, .skippedOffline, "")
         }
 
         if case .command(let invocation, let selectedText) = intent {
@@ -2644,13 +2730,18 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     activeRealtime?.cancel()
                 }
                 do {
-                    let transcriptionService = try self.makeTranscriptionService()
-                    async let transcript = Self.resolveRawTranscript(
-                        realtimeService: activeRealtime,
-                        fileService: transcriptionService,
-                        fileURL: transcriptionFileURL
-                    )
-                    let rawTranscript = try await transcript
+                    let rawTranscript: String
+                    if self.offlineModeEnabled {
+                        // Fully on-device transcription — no network, no realtime.
+                        rawTranscript = try await self.localTranscriptionService.transcribe(fileURL: transcriptionFileURL)
+                    } else {
+                        let transcriptionService = try self.makeTranscriptionService()
+                        rawTranscript = try await Self.resolveRawTranscript(
+                            realtimeService: activeRealtime,
+                            fileService: transcriptionService,
+                            fileURL: transcriptionFileURL
+                        )
+                    }
                     let parsedTranscript = Self.parseTranscriptCommands(
                         from: rawTranscript,
                         pressEnterCommandEnabled: self.isPressEnterVoiceCommandEnabled
@@ -2912,7 +3003,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
 
     private func startRealtimeStreamingIfEnabled() {
-        guard realtimeStreamingEnabled else { return }
+        // Realtime streaming uses a cloud WebSocket — never in offline mode.
+        guard realtimeStreamingEnabled, !offlineModeEnabled else { return }
         let trimmedBase = resolvedTranscriptionBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedBase.isEmpty else {
             os_log(.info, log: recordingLog, "realtime streaming requested but base URL is empty — skipping")

@@ -122,6 +122,12 @@ struct MenuBarView: View {
                 NotificationCenter.default.post(name: .showTranscribeAudio, object: nil)
             }
 
+            Button {
+                appState.offlineModeEnabled.toggle()
+            } label: {
+                Text(appState.offlineModeEnabled ? "✓ Offline Mode (local)" : "Offline Mode (local)")
+            }
+
             if let hotkeyError = appState.hotkeyMonitoringErrorMessage {
                 Divider()
                 Text(hotkeyError)

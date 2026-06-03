@@ -34,33 +34,15 @@ endif
 
 all: $(APP_EXECUTABLE_TARGET)
 
-$(APP_EXECUTABLE_TARGET): $(SOURCES) Info.plist $(ICON_ICNS)
+# The app is built via Swift Package Manager (see Package.swift) so it can depend
+# on WhisperKit for offline transcription. SwiftPM produces the executable; the
+# steps below assemble it into the .app bundle exactly as before.
+SPM_PRODUCT = AshtonFlow
+
+$(APP_EXECUTABLE_TARGET): $(SOURCES) Package.swift Info.plist $(ICON_ICNS)
 	@mkdir -p "$(MACOS_DIR)" "$(RESOURCES)"
-ifeq ($(ARCH),universal)
-	swiftc \
-		-parse-as-library \
-		-o "$(MACOS_DIR)/$(APP_NAME)-arm64" \
-		-sdk $(shell xcrun --show-sdk-path) \
-		-target arm64-apple-macosx13.0 \
-		$(SOURCES)
-	swiftc \
-		-parse-as-library \
-		-o "$(MACOS_DIR)/$(APP_NAME)-x86_64" \
-		-sdk $(shell xcrun --show-sdk-path) \
-		-target x86_64-apple-macosx13.0 \
-		$(SOURCES)
-	lipo -create -output "$(MACOS_DIR)/$(APP_NAME)" \
-		"$(MACOS_DIR)/$(APP_NAME)-arm64" \
-		"$(MACOS_DIR)/$(APP_NAME)-x86_64"
-	@rm "$(MACOS_DIR)/$(APP_NAME)-arm64" "$(MACOS_DIR)/$(APP_NAME)-x86_64"
-else
-	swiftc \
-		-parse-as-library \
-		-o "$(MACOS_DIR)/$(APP_NAME)" \
-		-sdk $(shell xcrun --show-sdk-path) \
-		-target $(ARCH)-apple-macosx13.0 \
-		$(SOURCES)
-endif
+	swift build -c release
+	@cp "$$(swift build -c release --show-bin-path)/$(SPM_PRODUCT)" "$(MACOS_DIR)/$(APP_NAME)"
 	@cp Info.plist "$(CONTENTS)/"
 	@plutil -replace CFBundleName -string "$(APP_NAME)" "$(CONTENTS)/Info.plist"
 	@plutil -replace CFBundleDisplayName -string "$(APP_NAME)" "$(CONTENTS)/Info.plist"
