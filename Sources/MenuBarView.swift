@@ -125,7 +125,9 @@ struct MenuBarView: View {
             Button {
                 appState.offlineModeEnabled.toggle()
             } label: {
-                Text(appState.offlineModeEnabled ? "✓ Offline Mode (local)" : "Offline Mode (local)")
+                Text(appState.offlineModeEnabled
+                    ? "✓ Offline Mode (local)"
+                    : (appState.autoOfflineActive ? "Offline Mode (local) — auto (no connection)" : "Offline Mode (local)"))
             }
 
             if let hotkeyError = appState.hotkeyMonitoringErrorMessage {

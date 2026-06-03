@@ -39,6 +39,15 @@ all: $(APP_EXECUTABLE_TARGET)
 # steps below assemble it into the .app bundle exactly as before.
 SPM_PRODUCT = AshtonFlow
 
+# Build against the full Xcode SDK when it's installed, so frameworks the
+# Command Line Tools SDK omits are available — notably FoundationModels, used for
+# on-device (offline) text cleanup. Falls back to whatever SDK is active
+# otherwise (offline cleanup then compiles out gracefully via canImport).
+XCODE_DEVDIR := $(shell [ -d /Applications/Xcode.app ] && echo /Applications/Xcode.app/Contents/Developer)
+ifneq ($(XCODE_DEVDIR),)
+export DEVELOPER_DIR := $(XCODE_DEVDIR)
+endif
+
 $(APP_EXECUTABLE_TARGET): $(SOURCES) Package.swift Info.plist $(ICON_ICNS)
 	@mkdir -p "$(MACOS_DIR)" "$(RESOURCES)"
 	swift build -c release

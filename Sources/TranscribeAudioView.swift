@@ -20,13 +20,14 @@ struct TranscribeAudioView: View {
     @State private var phase: Phase = .idle
     @State private var fileName: String = ""
     @State private var isTargeted = false
+    @State private var usedOffline = false
     @State private var currentTask: Task<Void, Never>?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Transcribe Audio")
                 .font(.title2.bold())
-            Text("Drag in an audio or video file, or choose one. The text appears below, is copied to your clipboard, and is saved to History.")
+            Text("Drag in an audio or video file, or choose one. The text appears below, is copied to your clipboard, and saved to your history.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -35,10 +36,12 @@ struct TranscribeAudioView: View {
 
             statusAndResult
 
+            historySection
+
             Spacer(minLength: 0)
         }
         .padding(20)
-        .frame(minWidth: 460, minHeight: 420)
+        .frame(minWidth: 480, minHeight: 520)
     }
 
     // MARK: - Drop zone
@@ -80,16 +83,22 @@ struct TranscribeAudioView: View {
             EmptyView()
 
         case .preparing, .transcribing:
-            HStack(spacing: 10) {
-                ProgressView().controlSize(.small)
-                Text(progressLabel)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(progressLabel)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                ProgressView()
+                    .progressViewStyle(.linear)
+                    .frame(maxWidth: .infinity)
             }
 
         case .done(let text):
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Label("Transcribed \(fileName)", systemImage: "checkmark.circle.fill")
+                    Label("Transcribed \(fileName)\(usedOffline ? " · on-device" : "")", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                         .font(.callout)
                     Spacer()
@@ -131,9 +140,69 @@ struct TranscribeAudioView: View {
 
     private var progressLabel: String {
         switch phase {
-        case .preparing: return "Preparing \(fileName)…"
-        case .transcribing: return "Transcribing \(fileName)…"
+        case .preparing: return "Extracting audio from \(fileName)…"
+        case .transcribing: return "Transcribing \(fileName) (\(usedOffline ? "on-device" : "cloud"))…"
         default: return ""
+        }
+    }
+
+    // MARK: - History
+
+    private var fileHistory: [PipelineHistoryItem] {
+        appState.pipelineHistory
+            .filter { $0.contextSummary.hasPrefix("Transcribed file:") }
+            .sorted { $0.timestamp > $1.timestamp }
+    }
+
+    @ViewBuilder
+    private var historySection: some View {
+        if !fileHistory.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Recent transcriptions")
+                    .font(.headline)
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(fileHistory.prefix(15)) { item in
+                            Button {
+                                fileName = item.contextWindowTitle ?? "transcription"
+                                usedOffline = false
+                                phase = .done(item.postProcessedTranscript)
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "doc.text")
+                                        .foregroundStyle(.secondary)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item.contextWindowTitle ?? "Transcription")
+                                            .font(.callout)
+                                            .lineLimit(1)
+                                        Text(item.postProcessedTranscript)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    Button {
+                                        copyToClipboard(item.postProcessedTranscript)
+                                    } label: {
+                                        Image(systemName: "doc.on.doc")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .help("Copy")
+                                }
+                                .padding(.vertical, 6)
+                                .padding(.horizontal, 8)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            Divider()
+                        }
+                    }
+                }
+                .frame(maxHeight: 170)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.2)))
+            }
         }
     }
 
@@ -176,6 +245,7 @@ struct TranscribeAudioView: View {
             prepared = preparedAudio
             if Task.isCancelled { preparedAudio.cleanup(); return }
 
+            usedOffline = appState.isOfflineActive
             phase = .transcribing
             let raw = try await appState.transcribeAudioFile(at: preparedAudio.url)
             if Task.isCancelled { preparedAudio.cleanup(); return }

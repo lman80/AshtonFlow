@@ -958,11 +958,25 @@ struct GeneralSettingsView: View {
     private var offlineModeSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Toggle("Transcribe on this Mac (offline)", isOn: $appState.offlineModeEnabled)
-            Text("Transcribes entirely on your Mac with a local Whisper model, so dictation works with no internet. Transcription only — no AI rewrite. The model downloads once while you're online, then runs offline.")
+            Text("Transcribes entirely on your Mac with a local Whisper model, so dictation works with no internet. The model downloads once while you're online, then runs offline.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if appState.offlineModeEnabled {
+            Divider()
+
+            Toggle("Automatically switch to offline when the connection fails", isOn: $appState.autoOfflineFallbackEnabled)
+            Text("If a cloud request fails — e.g. on a VPN that blocks the provider — AshtonFlow transcribes on-device instead, then switches back automatically when your connection changes.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Divider()
+
+            Toggle("Clean up text on-device when offline", isOn: $appState.offlineCleanupEnabled)
+            Text("Uses Apple's built-in on-device AI to clean up dictation and run Edit Mode while offline — same cleanup and Edit Mode settings as online. \(LocalPostProcessingService.availability.statusMessage)")
+                .font(.caption)
+                .foregroundStyle(LocalPostProcessingService.isAvailable ? Color.secondary : Color.orange)
+
+            if appState.offlineModeEnabled || appState.autoOfflineFallbackEnabled {
                 Divider()
 
                 HStack(spacing: 8) {

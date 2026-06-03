@@ -19,7 +19,9 @@ AshtonFlow lives in your menu bar. You press a key, talk, and your speech is tra
 - **One key does tap *and* hold.** If you set the Hold and Tap shortcuts to the same key: a quick **tap** starts recording and keeps going until you tap again; **press-and-hold** is push-to-talk and stops the moment you let go.
 - **Screen recording is optional and off by default.** It's a toggle in Settings → Permissions ("Capture screen for context"). The app works fully without it.
 - **Transcribe Audio window.** Menu bar → *Transcribe Audio…* opens a window where you drag in an **audio or video** file and get the text back (auto-copied to your clipboard and saved to History). Video audio is extracted automatically.
-- **Offline mode (on-device transcription).** Toggle it in Settings or the menu bar to transcribe **entirely on your Mac** with a local Whisper model (via [WhisperKit](https://github.com/argmaxinc/WhisperKit)) — works with no internet. The model downloads once while you're online (~150 MB for the default `base` model), then runs offline. Offline mode is transcription-only (no AI rewrite).
+- **Offline mode (on-device).** Toggle it in Settings or the menu bar to transcribe **entirely on your Mac** with a local Whisper model (via [WhisperKit](https://github.com/argmaxinc/WhisperKit)) — works with no internet. The model downloads once while you're online (~150 MB for the default `base` model), then runs offline.
+  - **Auto-fallback:** if a cloud request fails (e.g. on a VPN that blocks the provider), it automatically switches to offline transcription and switches back when your connection recovers. (On by default.)
+  - **Offline cleanup:** on macOS 26 with Apple Intelligence enabled, the automatic text cleanup **and** Edit Mode run **on-device** via Apple's Foundation Models — same settings as online. If Apple Intelligence is off, offline falls back to transcription-only.
 - **Speech-bubble menu bar icon** instead of the waveform.
 
 ---

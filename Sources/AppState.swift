@@ -6,6 +6,7 @@ import ServiceManagement
 import ApplicationServices
 import ScreenCaptureKit
 import Carbon
+import Network
 import os.log
 private let recordingLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "Recording")
 
@@ -223,6 +224,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let screenRecordingEnabledStorageKey = "screen_recording_enabled"
     private let offlineModeEnabledStorageKey = "offline_mode_enabled"
     private let offlineModelNameStorageKey = "offline_model_name"
+    private let offlineCleanupEnabledStorageKey = "offline_cleanup_enabled"
+    private let autoOfflineFallbackEnabledStorageKey = "auto_offline_fallback_enabled"
     static let defaultOfflineModelName = "base"
     static let offlineModelOptions = ["tiny", "base", "small", "large-v3-turbo"]
     private let shortcutStartDelayStorageKey = "shortcut_start_delay"
@@ -489,8 +492,32 @@ final class AppState: ObservableObject, @unchecked Sendable {
     /// UI status of the local model load/download (shown in Settings).
     @Published var localModelState: LocalModelState = .notLoaded
 
-    /// On-device transcription engine, used when `offlineModeEnabled` is on.
+    /// On-device transcription engine, used when offline.
     let localTranscriptionService: LocalTranscriptionService
+
+    /// Clean up dictation text on-device (Foundation Models) while offline.
+    @Published var offlineCleanupEnabled: Bool {
+        didSet { UserDefaults.standard.set(offlineCleanupEnabled, forKey: offlineCleanupEnabledStorageKey) }
+    }
+
+    /// Automatically switch to offline transcription when cloud requests fail
+    /// (e.g. on a VPN that blocks the provider), then switch back when the
+    /// connection changes. The user's manual offline toggle always wins.
+    @Published var autoOfflineFallbackEnabled: Bool {
+        didSet { UserDefaults.standard.set(autoOfflineFallbackEnabled, forKey: autoOfflineFallbackEnabledStorageKey) }
+    }
+
+    /// Runtime flag: auto-fallback is currently using offline because a cloud
+    /// request failed. Not persisted. Cleared when the network changes.
+    @Published var autoOfflineActive = false
+
+    /// The effective offline state used for all routing: the user's manual
+    /// choice OR an active auto-fallback.
+    var isOfflineActive: Bool { offlineModeEnabled || autoOfflineActive }
+
+    private let networkPathMonitor = NWPathMonitor()
+    private var lastNetworkPathSignature: String?
+    private var networkMonitoringStarted = false
 
     @Published var customSystemPromptLastModified: String {
         didSet {
@@ -701,6 +728,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let storedOfflineModelName = UserDefaults.standard.string(forKey: offlineModelNameStorageKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let offlineModelName = storedOfflineModelName.isEmpty ? Self.defaultOfflineModelName : storedOfflineModelName
+        let offlineCleanupEnabled = UserDefaults.standard.object(forKey: offlineCleanupEnabledStorageKey) == nil
+            ? true
+            : UserDefaults.standard.bool(forKey: offlineCleanupEnabledStorageKey)
+        let autoOfflineFallbackEnabled = UserDefaults.standard.object(forKey: autoOfflineFallbackEnabledStorageKey) == nil
+            ? true
+            : UserDefaults.standard.bool(forKey: autoOfflineFallbackEnabledStorageKey)
         let shortcutStartDelay = max(0, UserDefaults.standard.double(forKey: shortcutStartDelayStorageKey))
         let isCommandModeEnabled = UserDefaults.standard.object(forKey: commandModeEnabledStorageKey) == nil
             ? false
@@ -787,6 +820,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.screenRecordingEnabled = screenRecordingEnabled
         self.offlineModeEnabled = offlineModeEnabled
         self.offlineModelName = offlineModelName
+        self.offlineCleanupEnabled = offlineCleanupEnabled
+        self.autoOfflineFallbackEnabled = autoOfflineFallbackEnabled
         self.localTranscriptionService = LocalTranscriptionService(modelName: offlineModelName)
         self.customSystemPromptLastModified = customSystemPromptLastModified
         self.customContextPromptLastModified = customContextPromptLastModified
@@ -1036,11 +1071,74 @@ final class AppState: ObservableObject, @unchecked Sendable {
     /// Transcribes a file, routing to the local engine when Offline mode is on,
     /// otherwise the cloud service. Used by the Transcribe Audio window.
     func transcribeAudioFile(at url: URL) async throws -> String {
-        if offlineModeEnabled {
+        if isOfflineActive {
             return try await localTranscriptionService.transcribe(fileURL: url)
         }
-        let service = try makeFileTranscriptionService()
-        return try await service.transcribe(fileURL: url)
+        do {
+            let service = try makeFileTranscriptionService()
+            return try await service.transcribe(fileURL: url)
+        } catch {
+            // Auto-fallback: cloud failed (e.g. VPN-blocked) — transcribe locally.
+            if autoOfflineFallbackEnabled, !offlineModeEnabled, Self.isConnectivityError(error) {
+                await MainActor.run {
+                    self.autoOfflineActive = true
+                    self.prepareLocalModel()
+                }
+                return try await localTranscriptionService.transcribe(fileURL: url)
+            }
+            throw error
+        }
+    }
+
+    /// Classifies whether an error looks like a connectivity / region / VPN-block
+    /// failure that warrants falling back to offline transcription.
+    static func isConnectivityError(_ error: Error) -> Bool {
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet, .timedOut, .cannotConnectToHost, .cannotFindHost,
+                 .networkConnectionLost, .dataNotAllowed, .internationalRoamingOff,
+                 .secureConnectionFailed, .dnsLookupFailed:
+                return true
+            default:
+                return false
+            }
+        }
+        if let tError = error as? TranscriptionError {
+            switch tError {
+            case .transcriptionTimedOut:
+                return true
+            case .submissionFailed(let msg), .uploadFailed(let msg), .transcriptionFailed(let msg):
+                let m = msg.lowercased()
+                return m.contains("403") || m.contains("forbidden") || m.contains("permission")
+                    || m.contains("http 5") || m.contains("network") || m.contains("connection")
+                    || m.contains("timed out")
+            default:
+                return false
+            }
+        }
+        return false
+    }
+
+    /// Watches the network. When connectivity/interfaces change (e.g. a VPN is
+    /// turned off), clears an auto-fallback so the next request tries the cloud
+    /// again. Does nothing while the user has manually chosen offline.
+    func startNetworkMonitoring() {
+        guard !networkMonitoringStarted else { return }
+        networkMonitoringStarted = true
+        networkPathMonitor.pathUpdateHandler = { [weak self] path in
+            let signature = path.status == .satisfied
+                ? "sat:" + path.availableInterfaces.map { $0.name }.sorted().joined(separator: ",")
+                : "unsat"
+            DispatchQueue.main.async {
+                guard let self else { return }
+                defer { self.lastNetworkPathSignature = signature }
+                guard let last = self.lastNetworkPathSignature, last != signature else { return }
+                if self.autoOfflineActive, !self.offlineModeEnabled {
+                    self.autoOfflineActive = false
+                }
+            }
+        }
+        networkPathMonitor.start(queue: DispatchQueue(label: "com.ashton.ashtonflow.network"))
     }
 
     private static func normalizeTranscriptionLanguage(_ language: String) -> String {
@@ -2359,7 +2457,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 DispatchQueue.main.async {
                     guard self.isRecording, self.activeRecordingTriggerMode != nil else { return }
                     // Skip cloud context inference offline (it needs the network).
-                    if !self.offlineModeEnabled {
+                    if !self.isOfflineActive {
                         self.startContextCapture()
                     }
                     self.audioLevelCancellable = self.audioRecorder.$audioLevel
@@ -2575,13 +2673,43 @@ final class AppState: ObservableObject, @unchecked Sendable {
             return ("", .skippedEmptyRawTranscript, "")
         }
 
-        // Offline mode is transcription-only: no cloud rewrite or edit-mode
-        // transform (those need the network). Local macros still apply below.
-        if offlineModeEnabled {
+        // Offline: clean up on-device with Apple's Foundation Models when
+        // available and enabled; otherwise fall back to the raw transcript.
+        if isOfflineActive {
             if let macro = findMatchingMacro(for: trimmedRawTranscript) {
                 return (macro.payload, .voiceMacro(command: macro.command), "")
             }
-            return (trimmedRawTranscript, .skippedOffline, "")
+            guard offlineCleanupEnabled, LocalPostProcessingService.isAvailable else {
+                return (trimmedRawTranscript, .skippedOffline, "")
+            }
+            let localService = LocalPostProcessingService()
+            if case .command(let invocation, let selectedText) = intent {
+                do {
+                    let transformed = try await localService.transform(
+                        selectedText: selectedText,
+                        voiceCommand: rawTranscript,
+                        customVocabulary: customVocabulary,
+                        outputLanguage: outputLanguage
+                    )
+                    return (transformed, .commandModeSucceeded(invocation: invocation), "")
+                } catch {
+                    os_log(.error, log: recordingLog, "Offline edit mode failed: %{public}@", error.localizedDescription)
+                    return (selectedText, .commandModeFailedFallback(invocation: invocation), "")
+                }
+            }
+            do {
+                let cleaned = try await localService.cleanup(
+                    transcript: trimmedRawTranscript,
+                    contextSummary: context.contextSummary,
+                    customVocabulary: customVocabulary,
+                    customSystemPrompt: customSystemPrompt,
+                    outputLanguage: outputLanguage
+                )
+                return (cleaned, .postProcessingSucceeded, "")
+            } catch {
+                os_log(.error, log: recordingLog, "Offline cleanup failed: %{public}@", error.localizedDescription)
+                return (trimmedRawTranscript, .skippedOffline, "")
+            }
         }
 
         if case .command(let invocation, let selectedText) = intent {
@@ -2731,16 +2859,30 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 }
                 do {
                     let rawTranscript: String
-                    if self.offlineModeEnabled {
+                    if self.isOfflineActive {
                         // Fully on-device transcription — no network, no realtime.
                         rawTranscript = try await self.localTranscriptionService.transcribe(fileURL: transcriptionFileURL)
                     } else {
-                        let transcriptionService = try self.makeTranscriptionService()
-                        rawTranscript = try await Self.resolveRawTranscript(
-                            realtimeService: activeRealtime,
-                            fileService: transcriptionService,
-                            fileURL: transcriptionFileURL
-                        )
+                        do {
+                            let transcriptionService = try self.makeTranscriptionService()
+                            rawTranscript = try await Self.resolveRawTranscript(
+                                realtimeService: activeRealtime,
+                                fileService: transcriptionService,
+                                fileURL: transcriptionFileURL
+                            )
+                        } catch {
+                            // Auto-fallback: cloud unreachable (e.g. VPN-blocked) —
+                            // switch to offline and transcribe the same audio locally.
+                            guard self.autoOfflineFallbackEnabled,
+                                  !self.offlineModeEnabled,
+                                  Self.isConnectivityError(error) else { throw error }
+                            await MainActor.run {
+                                self.autoOfflineActive = true
+                                self.statusText = "No cloud connection — using offline"
+                                self.prepareLocalModel()
+                            }
+                            rawTranscript = try await self.localTranscriptionService.transcribe(fileURL: transcriptionFileURL)
+                        }
                     }
                     let parsedTranscript = Self.parseTranscriptCommands(
                         from: rawTranscript,
@@ -3004,7 +3146,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
     private func startRealtimeStreamingIfEnabled() {
         // Realtime streaming uses a cloud WebSocket — never in offline mode.
-        guard realtimeStreamingEnabled, !offlineModeEnabled else { return }
+        guard realtimeStreamingEnabled, !isOfflineActive else { return }
         let trimmedBase = resolvedTranscriptionBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedBase.isEmpty else {
             os_log(.info, log: recordingLog, "realtime streaming requested but base URL is empty — skipping")

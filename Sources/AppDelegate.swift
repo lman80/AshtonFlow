@@ -26,6 +26,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
 
+        appState.startNetworkMonitoring()
+
         if !appState.hasCompletedSetup {
             showSetupWindow()
         } else {
