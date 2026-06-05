@@ -22,6 +22,7 @@ AshtonFlow lives in your menu bar. You press a key, talk, and your speech is tra
 - **Offline mode (on-device).** Toggle it in Settings or the menu bar to transcribe **entirely on your Mac** with a local Whisper model (via [WhisperKit](https://github.com/argmaxinc/WhisperKit)) — works with no internet. The model downloads once while you're online (~150 MB for the default `base` model), then runs offline.
   - **Auto-fallback:** if a cloud request fails (e.g. on a VPN that blocks the provider), it automatically switches to offline transcription and switches back when your connection recovers. (On by default.)
   - **Offline cleanup:** on macOS 26 with Apple Intelligence enabled, the automatic text cleanup **and** Edit Mode run **on-device** via Apple's Foundation Models — same settings as online. If Apple Intelligence is off, offline falls back to transcription-only.
+- **Automatic updates.** AshtonFlow checks this repo's [Releases](../../releases) and can download + install new versions in place (menu bar → *Check for Updates*, plus periodic background checks).
 - **Speech-bubble menu bar icon** instead of the waveform.
 
 ---
@@ -68,6 +69,18 @@ make         # just builds -> build/AshtonFlow.app
 ```
 
 The build uses Swift Package Manager (`swift build`) and fetches WhisperKit the first time (needs internet once at build time). It signs ad-hoc automatically if you don't have a code-signing certificate, so `make` works on any Mac with no setup. Then drag `build/AshtonFlow.app` into Applications.
+
+### Releasing an update (for the maintainer)
+
+Bump the version, build a zipped artifact, and publish it as a GitHub Release — installed copies (with auto-update on) will pick it up:
+
+```bash
+make release VERSION=1.0.2
+gh release create v1.0.2 build/AshtonFlow.zip -R lman80/AshtonFlow \
+  --title "AshtonFlow 1.0.2" --notes "What changed…"
+```
+
+The version in the release tag (`vX.Y.Z`) must be higher than installed copies' version for them to update.
 
 ---
 

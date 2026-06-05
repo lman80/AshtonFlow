@@ -30,7 +30,7 @@ ICON_SOURCE = Resources/AppIcon-Source.png
 ICON_ICNS = Resources/AppIcon.icns
 endif
 
-.PHONY: all clean run icon dmg codesign-dmg notarize
+.PHONY: all clean run icon dmg codesign-dmg notarize release
 
 all: $(APP_EXECUTABLE_TARGET)
 
@@ -129,3 +129,14 @@ clean:
 
 run: all
 	open "$(APP_BUNDLE)"
+
+# Build a versioned, zipped release artifact for GitHub Releases.
+# Usage: make release VERSION=1.0.2
+# Then:  gh release create v1.0.2 build/AshtonFlow.zip -R lman80/AshtonFlow --title "AshtonFlow 1.0.2" --notes "..."
+# Removes the bundle first so the new VERSION/FreeFlowBuildTag are re-stamped.
+release:
+	@rm -rf "$(APP_BUNDLE)"
+	@$(MAKE) all
+	@rm -f "$(BUILD_DIR)/$(APP_NAME).zip"
+	@ditto -c -k --keepParent "$(APP_BUNDLE)" "$(BUILD_DIR)/$(APP_NAME).zip"
+	@echo "Release zip: $(BUILD_DIR)/$(APP_NAME).zip (version $(VERSION), tag $(BUILD_TAG))"
