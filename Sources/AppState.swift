@@ -468,6 +468,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
         didSet {
             guard oldValue != offlineModeEnabled else { return }
             UserDefaults.standard.set(offlineModeEnabled, forKey: offlineModeEnabledStorageKey)
+            statusHUD.show(offlineModeEnabled ? "Offline · on-device" : "Online",
+                           systemImage: offlineModeEnabled ? "cpu" : "cloud")
             if offlineModeEnabled {
                 // Begin loading/downloading the model the moment it's turned on.
                 prepareLocalModel()
@@ -485,6 +487,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             localModelState = .notLoaded
             let name = offlineModelName
             Task { await localTranscriptionService.setModel(name) }
+            statusHUD.show("Switched to \(offlineModelName) model", systemImage: "arrow.triangle.2.circlepath")
             if offlineModeEnabled { prepareLocalModel() }
         }
     }
@@ -509,7 +512,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
     /// Runtime flag: auto-fallback is currently using offline because a cloud
     /// request failed. Not persisted. Cleared when the network changes.
-    @Published var autoOfflineActive = false
+    @Published var autoOfflineActive = false {
+        didSet {
+            guard oldValue != autoOfflineActive else { return }
+            statusHUD.show(autoOfflineActive ? "Offline · no connection" : "Back online",
+                           systemImage: autoOfflineActive ? "wifi.slash" : "cloud")
+        }
+    }
 
     /// The effective offline state used for all routing: the user's manual
     /// choice OR an active auto-fallback.
@@ -518,6 +527,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let networkPathMonitor = NWPathMonitor()
     private var lastNetworkPathSignature: String?
     private var networkMonitoringStarted = false
+
+    /// Small top-of-screen toast shown when transcription mode/model changes.
+    let statusHUD = StatusHUD()
 
     @Published var customSystemPromptLastModified: String {
         didSet {

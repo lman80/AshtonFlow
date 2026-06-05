@@ -167,9 +167,9 @@ final class UpdateManager: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: "updateLastPostTranscriptionReminderDate") }
     }
 
-    private let releasesURL = URL(string: "https://api.github.com/repos/zachlatta/freeflow/releases?per_page=100")!
-    private let stabilityBufferDays: TimeInterval = 3
-    private let checkIntervalSeconds: TimeInterval = 7 * 24 * 60 * 60 // 7 days
+    private let releasesURL = URL(string: "https://api.github.com/repos/lman80/AshtonFlow/releases?per_page=100")!
+    private let stabilityBufferDays: TimeInterval = 0
+    private let checkIntervalSeconds: TimeInterval = 6 * 60 * 60 // 6 hours
     private let postTranscriptionReminderInterval: TimeInterval = 24 * 60 * 60 // 1 day
     private var periodicTimer: Timer?
     private var activeDownloadTask: Task<Void, Never>?
@@ -697,24 +697,26 @@ final class UpdateManager: ObservableObject {
     }
 
     func downloadAndInstall(release: GitHubRelease) {
-        guard let dmgAsset = release.assets.first(where: { $0.name.hasSuffix(".dmg") }) else {
+        // Prefer a .zip (what AshtonFlow ships), fall back to .dmg.
+        let asset = release.assets.first(where: { $0.name.hasSuffix(".zip") })
+            ?? release.assets.first(where: { $0.name.hasSuffix(".dmg") })
+        guard let asset, let downloadURL = URL(string: asset.browserDownloadUrl) else {
             if let url = URL(string: release.htmlUrl) {
                 NSWorkspace.shared.open(url)
             }
             return
         }
 
-        guard let downloadURL = URL(string: dmgAsset.browserDownloadUrl) else { return }
-
+        let isZip = asset.name.hasSuffix(".zip")
         activeDownloadTask?.cancel()
         activeDownloadTask = Task {
-            await performUpdate(downloadURL: downloadURL, expectedSize: dmgAsset.size)
+            await performUpdate(downloadURL: downloadURL, expectedSize: asset.size, isZip: isZip)
         }
     }
 
-    private func performUpdate(downloadURL: URL, expectedSize: Int) async {
+    private func performUpdate(downloadURL: URL, expectedSize: Int, isZip: Bool) async {
         let fm = FileManager.default
-        let tempDir = fm.temporaryDirectory.appendingPathComponent("freeflow-update-\(UUID().uuidString)")
+        let tempDir = fm.temporaryDirectory.appendingPathComponent("ashtonflow-update-\(UUID().uuidString)")
 
         do {
             try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -723,7 +725,7 @@ final class UpdateManager: ObservableObject {
             return
         }
 
-        let dmgPath = tempDir.appendingPathComponent("FreeFlow.dmg")
+        let downloadFile = tempDir.appendingPathComponent(isZip ? "AshtonFlow.zip" : "AshtonFlow.dmg")
 
         // MARK: Download phase
         updateStatus = .downloading
@@ -740,8 +742,8 @@ final class UpdateManager: ObservableObject {
                 ?? expectedSize
 
             let outputHandle = try FileHandle(forWritingTo: {
-                fm.createFile(atPath: dmgPath.path, contents: nil)
-                return dmgPath
+                fm.createFile(atPath: downloadFile.path, contents: nil)
+                return downloadFile
             }())
 
             // Run the byte-iteration and file I/O off the main thread
@@ -797,40 +799,62 @@ final class UpdateManager: ObservableObject {
             return
         }
 
-        // MARK: Install phase - mount DMG, extract app
+        // MARK: Install phase - extract app (from zip or dmg)
         updateStatus = .installing
         downloadProgress = nil
 
         do {
-            let mountPoint = try await Task.detached {
-                try self.mountDMG(at: dmgPath)
-            }.value
+            let appBundle: URL
+            var detachMount: (() -> Void)?
 
-            defer {
-                // Always try to detach
-                let detach = Process()
-                detach.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-                detach.arguments = ["detach", mountPoint, "-quiet"]
-                try? detach.run()
-                detach.waitUntilExit()
-            }
-
-            // Find the .app inside the mounted volume
-            let volumeURL = URL(fileURLWithPath: mountPoint)
-            let contents = try fm.contentsOfDirectory(at: volumeURL, includingPropertiesForKeys: nil)
-            guard let appBundle = contents.first(where: { $0.pathExtension == "app" }) else {
-                updateStatus = .error("No .app found in DMG.")
-                try? fm.removeItem(at: tempDir)
-                return
+            if isZip {
+                let extractDir = tempDir.appendingPathComponent("extracted")
+                try fm.createDirectory(at: extractDir, withIntermediateDirectories: true)
+                try await Task.detached {
+                    try Self.unzip(at: downloadFile, to: extractDir)
+                }.value
+                let contents = try fm.contentsOfDirectory(at: extractDir, includingPropertiesForKeys: nil)
+                guard let app = contents.first(where: { $0.pathExtension == "app" }) else {
+                    updateStatus = .error("No .app found in the downloaded update.")
+                    try? fm.removeItem(at: tempDir)
+                    return
+                }
+                appBundle = app
+            } else {
+                let mountPoint = try await Task.detached {
+                    try self.mountDMG(at: downloadFile)
+                }.value
+                detachMount = {
+                    let detach = Process()
+                    detach.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+                    detach.arguments = ["detach", mountPoint, "-quiet"]
+                    try? detach.run()
+                    detach.waitUntilExit()
+                }
+                let volumeURL = URL(fileURLWithPath: mountPoint)
+                let contents = try fm.contentsOfDirectory(at: volumeURL, includingPropertiesForKeys: nil)
+                guard let app = contents.first(where: { $0.pathExtension == "app" }) else {
+                    detachMount?()
+                    updateStatus = .error("No .app found in DMG.")
+                    try? fm.removeItem(at: tempDir)
+                    return
+                }
+                appBundle = app
             }
 
             // Copy app to staging directory
-            let stagingDir = fm.temporaryDirectory.appendingPathComponent("freeflow-staged-\(UUID().uuidString)")
+            let stagingDir = fm.temporaryDirectory.appendingPathComponent("ashtonflow-staged-\(UUID().uuidString)")
             try fm.createDirectory(at: stagingDir, withIntermediateDirectories: true)
             let stagedApp = stagingDir.appendingPathComponent(appBundle.lastPathComponent)
             try fm.copyItem(at: appBundle, to: stagedApp)
 
-            // Clean up DMG (detach happens in defer above, delete temp dir)
+            detachMount?()
+
+            // The update is downloaded from the internet, so macOS marks it
+            // quarantined. AshtonFlow isn't notarized, so a quarantined app would
+            // be blocked on relaunch — strip the flag so the update opens cleanly.
+            Self.stripQuarantine(stagedApp)
+
             try? fm.removeItem(at: tempDir)
 
             // MARK: Replace & relaunch
@@ -841,6 +865,29 @@ final class UpdateManager: ObservableObject {
             updateStatus = .error("Install failed: \(error.localizedDescription)")
             try? fm.removeItem(at: tempDir)
         }
+    }
+
+    nonisolated private static func unzip(at zip: URL, to destination: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = ["-x", "-k", zip.path, destination.path]
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw NSError(domain: "UpdateManager", code: 10, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to unzip the update (ditto exit \(process.terminationStatus))."
+            ])
+        }
+    }
+
+    nonisolated private static func stripQuarantine(_ app: URL) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+        process.arguments = ["-dr", "com.apple.quarantine", app.path]
+        process.standardError = Pipe()
+        try? process.run()
+        process.waitUntilExit()
     }
 
     nonisolated private func mountDMG(at path: URL) throws -> String {

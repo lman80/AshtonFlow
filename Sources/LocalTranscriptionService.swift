@@ -37,6 +37,18 @@ actor LocalTranscriptionService {
 
     var isLoaded: Bool { whisperKit != nil }
 
+    /// Whether the given model already exists on disk (downloaded previously), so
+    /// we can warm it at launch without triggering a fresh network download.
+    nonisolated static func hasDownloadedModel(named modelName: String) -> Bool {
+        let base = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/huggingface/models/argmaxinc/whisperkit-coreml")
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: base.path) else {
+            return false
+        }
+        let needle = modelName.lowercased()
+        return entries.contains { $0.lowercased().contains(needle) }
+    }
+
     /// Switch the model; drops the loaded instance so the next prepare() reloads.
     func setModel(_ name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)

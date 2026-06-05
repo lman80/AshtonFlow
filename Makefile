@@ -39,6 +39,12 @@ all: $(APP_EXECUTABLE_TARGET)
 # steps below assemble it into the .app bundle exactly as before.
 SPM_PRODUCT = AshtonFlow
 
+# Version stamped into the app. Bump VERSION for each release and tag the GitHub
+# release "v$(VERSION)" so the in-app updater (which compares CFBundleShortVersion
+# and the embedded FreeFlowBuildTag against GitHub Releases) detects it.
+VERSION ?= 1.0.0
+BUILD_TAG ?= v$(VERSION)
+
 # Build against the full Xcode SDK when it's installed, so frameworks the
 # Command Line Tools SDK omits are available — notably FoundationModels, used for
 # on-device (offline) text cleanup. Falls back to whatever SDK is active
@@ -57,6 +63,9 @@ $(APP_EXECUTABLE_TARGET): $(SOURCES) Package.swift Info.plist $(ICON_ICNS)
 	@plutil -replace CFBundleDisplayName -string "$(APP_NAME)" "$(CONTENTS)/Info.plist"
 	@plutil -replace CFBundleExecutable -string "$(APP_NAME)" "$(CONTENTS)/Info.plist"
 	@plutil -replace CFBundleIdentifier -string "$(BUNDLE_ID)" "$(CONTENTS)/Info.plist"
+	@plutil -replace CFBundleShortVersionString -string "$(VERSION)" "$(CONTENTS)/Info.plist"
+	@plutil -replace CFBundleVersion -string "$(VERSION)" "$(CONTENTS)/Info.plist"
+	@plutil -replace FreeFlowBuildTag -string "$(BUILD_TAG)" "$(CONTENTS)/Info.plist"
 	@cp $(ICON_ICNS) "$(RESOURCES)/AppIcon.icns"
 	@plutil -replace NSMicrophoneUsageDescription -string "$(APP_NAME) needs microphone access to transcribe your speech." "$(CONTENTS)/Info.plist"
 	@plutil -replace NSSpeechRecognitionUsageDescription -string "$(APP_NAME) needs speech recognition to convert your voice to text." "$(CONTENTS)/Info.plist"

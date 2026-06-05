@@ -33,7 +33,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             appState.startHotkeyMonitoring()
             appState.startAccessibilityPolling()
-            if appState.offlineModeEnabled {
+            // Keep the on-device model warm so offline (incl. auto-fallback) is
+            // instant. Preload when offline is on, or when auto-fallback is on and
+            // the model is already downloaded (so we don't trigger a surprise
+            // download for users who never go offline).
+            if appState.offlineModeEnabled
+                || (appState.autoOfflineFallbackEnabled
+                    && LocalTranscriptionService.hasDownloadedModel(named: appState.offlineModelName)) {
                 appState.prepareLocalModel()
             }
             Task { @MainActor in

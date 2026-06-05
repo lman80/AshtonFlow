@@ -534,7 +534,7 @@ struct GeneralSettingsView: View {
     @State private var copiedBuildInfoResetWorkItem: DispatchWorkItem?
     @StateObject private var githubCache = GitHubMetadataCache.shared
     @ObservedObject private var updateManager = UpdateManager.shared
-    private let freeflowRepoURL = URL(string: "https://github.com/zachlatta/freeflow")!
+    private let freeflowRepoURL = URL(string: "https://github.com/lman80/AshtonFlow")!
 
     private var appDisplayName: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
@@ -605,7 +605,7 @@ struct GeneralSettingsView: View {
                             Button {
                                 openURL(freeflowRepoURL)
                             } label: {
-                                Text("zachlatta/freeflow")
+                                Text("lman80/AshtonFlow")
                                     .font(.system(.caption, design: .monospaced).weight(.medium))
                             }
                             .buttonStyle(.plain)

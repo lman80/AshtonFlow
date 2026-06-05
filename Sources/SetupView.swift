@@ -54,7 +54,7 @@ struct SetupView: View {
     var onComplete: () -> Void
     @EnvironmentObject var appState: AppState
     @Environment(\.openURL) private var openURL
-    private let freeflowRepoURL = URL(string: "https://github.com/zachlatta/freeflow")!
+    private let freeflowRepoURL = URL(string: "https://github.com/lman80/AshtonFlow")!
     private enum SetupStep: Int, CaseIterable {
         case welcome = 0
         case apiKey
@@ -292,7 +292,7 @@ struct SetupView: View {
                     Button {
                         openURL(freeflowRepoURL)
                     } label: {
-                        Text("zachlatta/freeflow")
+                        Text("lman80/AshtonFlow")
                             .font(.system(.caption, design: .monospaced).weight(.medium))
                     }
                     .buttonStyle(.plain)
@@ -1359,7 +1359,7 @@ class GitHubMetadataCache: ObservableObject {
 
     private var lastFetchDate: Date?
     private let cacheDuration: TimeInterval = 5 * 60 // 5 minutes
-    private let repoAPIURL = URL(string: "https://api.github.com/repos/zachlatta/freeflow")!
+    private let repoAPIURL = URL(string: "https://api.github.com/repos/lman80/AshtonFlow")!
 
     private init() {}
 
@@ -1382,7 +1382,7 @@ class GitHubMetadataCache: ObservableObject {
             if count > 0 {
                 let perPage = 100
                 let lastPage = max(1, Int(ceil(Double(count) / Double(perPage))))
-                let stargazersURL = URL(string: "https://api.github.com/repos/zachlatta/freeflow/stargazers?per_page=\(perPage)&page=\(lastPage)")!
+                let stargazersURL = URL(string: "https://api.github.com/repos/lman80/AshtonFlow/stargazers?per_page=\(perPage)&page=\(lastPage)")!
                 var request = URLRequest(url: stargazersURL)
                 request.setValue("application/vnd.github.v3.star+json", forHTTPHeaderField: "Accept")
                 let starredResult = try await URLSession.shared.data(for: request)
@@ -1394,7 +1394,7 @@ class GitHubMetadataCache: ObservableObject {
             }
 
             var contributors: [GitHubContributor] = []
-            let contributorsURL = URL(string: "https://api.github.com/repos/zachlatta/freeflow/contributors?per_page=15")!
+            let contributorsURL = URL(string: "https://api.github.com/repos/lman80/AshtonFlow/contributors?per_page=15")!
             do {
                 let contributorsResult = try await URLSession.shared.data(from: contributorsURL)
                 if let contribHTTP = contributorsResult.1 as? HTTPURLResponse,
