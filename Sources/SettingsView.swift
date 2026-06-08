@@ -1370,19 +1370,52 @@ struct GeneralSettingsView: View {
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text("Press Return after dictation")
                     .font(.caption.weight(.semibold))
                 Picker("", selection: returnBehaviorBinding) {
                     Text("Never").tag(ReturnBehavior.never)
-                    Text("Only when I say \u{201C}press enter\u{201D}").tag(ReturnBehavior.onCommand)
+                    Text("When I say a word").tag(ReturnBehavior.onCommand)
                     Text("Always").tag(ReturnBehavior.always)
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
-                .frame(maxWidth: 320, alignment: .leading)
+                .frame(maxWidth: 260, alignment: .leading)
 
-                Text(returnBehaviorHelp)
+                if appState.isPressEnterVoiceCommandEnabled && !appState.alwaysPressEnterAfterPaste {
+                    HStack(spacing: 8) {
+                        Text("Word:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextField("send", text: $appState.sendTriggerPhrase)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 160)
+                    }
+                    Text("Say this at the end to send. A distinctive word like \u{201C}zap\u{201D} or \u{201C}boom\u{201D} avoids accidental sends when a sentence happens to end the same way.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(returnBehaviorHelp)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text("Quick-send key")
+                        .font(.caption.weight(.semibold))
+                    Picker("", selection: $appState.quickSendModifier) {
+                        ForEach(QuickSendModifier.allCases) { modifier in
+                            Text(modifier.title).tag(modifier)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 150)
+                }
+                Text("Hold this key while dictating to press Return that time — no word needed, even if the setting above is “Never”.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

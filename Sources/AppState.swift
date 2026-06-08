@@ -10,6 +10,33 @@ import Network
 import os.log
 private let recordingLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "Recording")
 
+/// Optional modifier held during dictation to press Return that time only.
+enum QuickSendModifier: String, CaseIterable, Identifiable {
+    case off, shift, option, control, command
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .off: return "Off"
+        case .shift: return "⇧ Shift"
+        case .option: return "⌥ Option"
+        case .control: return "⌃ Control"
+        case .command: return "⌘ Command"
+        }
+    }
+
+    var shortcutModifier: ShortcutModifiers? {
+        switch self {
+        case .off: return nil
+        case .shift: return .shift
+        case .option: return .option
+        case .control: return .control
+        case .command: return .command
+        }
+    }
+}
+
 struct VoiceMacro: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
     var command: String
@@ -233,6 +260,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let pressEnterVoiceCommandStorageKey = "press_enter_voice_command_enabled"
     private let directTypeInsteadOfPasteStorageKey = "direct_type_insert"
     private let alwaysPressEnterAfterPasteStorageKey = "always_press_enter_after_paste"
+    private let sendTriggerPhraseStorageKey = "send_trigger_phrase"
+    private let quickSendModifierStorageKey = "quick_send_modifier"
+    static let defaultSendTriggerPhrase = "press enter"
     private let alertSoundsEnabledStorageKey = "alert_sounds_enabled"
     private let soundVolumeStorageKey = "sound_volume"
     private let voiceMacrosStorageKey = "voice_macros"
@@ -613,6 +643,23 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// The spoken word/phrase that triggers Return (when "say a word" is on).
+    @Published var sendTriggerPhrase: String {
+        didSet {
+            UserDefaults.standard.set(sendTriggerPhrase, forKey: sendTriggerPhraseStorageKey)
+        }
+    }
+
+    /// Hold this modifier while dictating to press Return that time only.
+    @Published var quickSendModifier: QuickSendModifier {
+        didSet {
+            UserDefaults.standard.set(quickSendModifier.rawValue, forKey: quickSendModifierStorageKey)
+        }
+    }
+
+    /// Captured at dictation start: was the quick-send modifier held this time?
+    private var pendingSendThisSession = false
+
     @Published var alertSoundsEnabled: Bool {
         didSet {
             UserDefaults.standard.set(alertSoundsEnabled, forKey: alertSoundsEnabledStorageKey)
@@ -768,6 +815,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let shortcutStartDelay = max(0, UserDefaults.standard.double(forKey: shortcutStartDelayStorageKey))
         let directTypeInsteadOfPaste = UserDefaults.standard.bool(forKey: directTypeInsteadOfPasteStorageKey)
         let alwaysPressEnterAfterPaste = UserDefaults.standard.bool(forKey: alwaysPressEnterAfterPasteStorageKey)
+        let sendTriggerPhrase = UserDefaults.standard.string(forKey: sendTriggerPhraseStorageKey) ?? Self.defaultSendTriggerPhrase
+        let quickSendModifier = QuickSendModifier(rawValue: UserDefaults.standard.string(forKey: quickSendModifierStorageKey) ?? "") ?? .off
         let isCommandModeEnabled = UserDefaults.standard.object(forKey: commandModeEnabledStorageKey) == nil
             ? false
             : UserDefaults.standard.bool(forKey: commandModeEnabledStorageKey)
@@ -867,6 +916,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.isPressEnterVoiceCommandEnabled = isPressEnterVoiceCommandEnabled
         self.directTypeInsteadOfPaste = directTypeInsteadOfPaste
         self.alwaysPressEnterAfterPaste = alwaysPressEnterAfterPaste
+        self.sendTriggerPhrase = sendTriggerPhrase
+        self.quickSendModifier = quickSendModifier
         self.alertSoundsEnabled = alertSoundsEnabled
         self.soundVolume = soundVolume
         self.voiceMacros = initialMacros
@@ -1380,7 +1431,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 let rawTranscript = try await transcriptionService.transcribe(fileURL: audioURL)
                 let parsedTranscript = Self.parseTranscriptCommands(
                     from: rawTranscript,
-                    pressEnterCommandEnabled: self.isPressEnterVoiceCommandEnabled
+                    pressEnterCommandEnabled: self.isPressEnterVoiceCommandEnabled,
+                    triggerPhrase: self.sendTriggerPhrase
                 )
 
                 let finalTranscript: String
@@ -2110,6 +2162,11 @@ final class AppState: ObservableObject, @unchecked Sendable {
         pendingManualCommandInvocation = hotkeyManager.currentPressedModifiers.contains(
             commandModeManualModifier.shortcutModifier
         )
+        if let sendModifier = quickSendModifier.shortcutModifier {
+            pendingSendThisSession = hotkeyManager.currentPressedModifiers.contains(sendModifier)
+        } else {
+            pendingSendThisSession = false
+        }
         pendingShortcutStartMode = mode
         let delay = shortcutStartDelay
 
@@ -2140,6 +2197,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         pendingShortcutStartTask = nil
         pendingSelectionSnapshot = nil
         pendingManualCommandInvocation = false
+        pendingSendThisSession = false
         if resetMode {
             pendingShortcutStartMode = nil
         }
@@ -2604,11 +2662,24 @@ final class AppState: ObservableObject, @unchecked Sendable {
         return strippedPunctuation.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Builds a regex that matches the trigger phrase at the very end of the
+    /// transcript (case-insensitive, allowing trailing punctuation/space).
+    private static func trailingPhrasePattern(for phrase: String) -> NSRegularExpression? {
+        let trimmed = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        var escaped = NSRegularExpression.escapedPattern(for: trimmed)
+        // Allow flexible whitespace between words of a multi-word phrase.
+        escaped = escaped.replacingOccurrences(of: " ", with: #"[ \t\r\n]+"#)
+        let pattern = #"(?i)(?:^|[ \t\r\n,;:\-]+)"# + escaped + #"[\s\p{P}]*$"#
+        return try? NSRegularExpression(pattern: pattern)
+    }
+
     private static func parseTranscriptCommands(
         from transcript: String,
-        pressEnterCommandEnabled: Bool
+        pressEnterCommandEnabled: Bool,
+        triggerPhrase: String
     ) -> TranscriptCommandParsingResult {
-        guard pressEnterCommandEnabled else {
+        guard pressEnterCommandEnabled, let pattern = trailingPhrasePattern(for: triggerPhrase) else {
             return TranscriptCommandParsingResult(
                 transcript: transcript.trimmingCharacters(in: .whitespacesAndNewlines),
                 shouldPressEnterAfterPaste: false
@@ -2617,7 +2688,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
         let fullRange = NSRange(transcript.startIndex..<transcript.endIndex, in: transcript)
         guard
-            let match = trailingPressEnterCommandPattern.firstMatch(in: transcript, range: fullRange),
+            let match = pattern.firstMatch(in: transcript, range: fullRange),
             let commandRange = Range(match.range, in: transcript)
         else {
             return TranscriptCommandParsingResult(
@@ -2816,6 +2887,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
         shortcutSessionController.reset()
         activeRecordingTriggerMode = nil
         let sessionIntent = currentSessionIntent
+        let sendThisSession = pendingSendThisSession
+        pendingSendThisSession = false
         currentSessionIntent = .dictation
         audioRecorder.onRecordingReady = nil
         audioRecorder.onRecordingFailure = nil
@@ -2921,7 +2994,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     }
                     let parsedTranscript = Self.parseTranscriptCommands(
                         from: rawTranscript,
-                        pressEnterCommandEnabled: self.isPressEnterVoiceCommandEnabled
+                        pressEnterCommandEnabled: self.isPressEnterVoiceCommandEnabled,
+                        triggerPhrase: self.sendTriggerPhrase
                     )
                     try Task.checkCancellation()
                     // Capture the parsed raw transcript as lastTranscript before
@@ -3007,12 +3081,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         }
 
                         if trimmedFinalTranscript.isEmpty {
-                            self.statusText = shouldPressEnterAfterPaste ? enterOnlyStatusText : "Nothing to transcribe"
+                            let pressEnterOnly = shouldPressEnterAfterPaste || sendThisSession
+                            self.statusText = pressEnterOnly ? enterOnlyStatusText : "Nothing to transcribe"
                             self.clearPendingOverlayDismissToken()
                             if !self.showPostTranscriptionUpdateReminderIfNeeded() {
                                 self.overlayManager.dismiss()
                             }
-                            if shouldPressEnterAfterPaste {
+                            if pressEnterOnly {
                                 self.pressEnterWhenShortcutReleased()
                             }
                         } else {
@@ -3026,7 +3101,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                                 }
                             }
 
-                            let pressEnterNow = shouldPressEnterAfterPaste || self.alwaysPressEnterAfterPaste
+                            let pressEnterNow = shouldPressEnterAfterPaste || self.alwaysPressEnterAfterPaste || sendThisSession
                             if self.directTypeInsteadOfPaste {
                                 // Type directly — never touches the clipboard.
                                 let textToInsert = Self.transcriptWithTrailingSpace(trimmedFinalTranscript)
