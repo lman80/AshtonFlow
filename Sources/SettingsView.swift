@@ -1310,44 +1310,93 @@ struct GeneralSettingsView: View {
 
     // MARK: Clipboard
 
+    private enum TextInsertMode: Hashable { case paste, typeDirectly }
+    private enum ReturnBehavior: Hashable { case never, onCommand, always }
+
+    private var insertModeBinding: Binding<TextInsertMode> {
+        Binding(
+            get: { appState.directTypeInsteadOfPaste ? .typeDirectly : .paste },
+            set: { appState.directTypeInsteadOfPaste = ($0 == .typeDirectly) }
+        )
+    }
+
+    private var returnBehaviorBinding: Binding<ReturnBehavior> {
+        Binding(
+            get: {
+                if appState.alwaysPressEnterAfterPaste { return .always }
+                if appState.isPressEnterVoiceCommandEnabled { return .onCommand }
+                return .never
+            },
+            set: { newValue in
+                switch newValue {
+                case .never:
+                    appState.alwaysPressEnterAfterPaste = false
+                    appState.isPressEnterVoiceCommandEnabled = false
+                case .onCommand:
+                    appState.alwaysPressEnterAfterPaste = false
+                    appState.isPressEnterVoiceCommandEnabled = true
+                case .always:
+                    appState.alwaysPressEnterAfterPaste = true
+                    appState.isPressEnterVoiceCommandEnabled = true
+                }
+            }
+        )
+    }
+
     private var clipboardSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Toggle("Type text directly (don't use the clipboard)", isOn: $appState.directTypeInsteadOfPaste)
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("How to insert dictated text")
+                    .font(.caption.weight(.semibold))
+                Picker("", selection: insertModeBinding) {
+                    Text("Type directly").tag(TextInsertMode.typeDirectly)
+                    Text("Paste").tag(TextInsertMode.paste)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
 
-            Text("Inserts dictated text by simulating keystrokes, so your clipboard is never touched — handy if you like to copy and paste right after dictating. Slightly slower for very long text, and a few apps handle simulated typing differently.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Divider()
-                .padding(.vertical, 2)
-
-            Toggle("Preserve clipboard after paste", isOn: $appState.preserveClipboard)
-                .disabled(appState.directTypeInsteadOfPaste)
-
-            Text(appState.directTypeInsteadOfPaste
-                ? "Not needed while \"Type text directly\" is on — the clipboard isn't used."
-                : "\(AppName.displayName) will temporarily place the transcript on your clipboard to paste it, then restore whatever was there before. If you copy something else before the restore happens, \(AppName.displayName) leaves it alone.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Divider()
-                .padding(.vertical, 2)
-
-            Toggle("Always press Return after paste", isOn: $appState.alwaysPressEnterAfterPaste)
-
-            Text("Presses Return automatically after each dictation is inserted — handy for sending messages or running searches.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                if appState.directTypeInsteadOfPaste {
+                    Text("Text is typed straight in, so your clipboard is never touched. Best if you copy and paste right after dictating.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Toggle("Restore my clipboard afterward", isOn: $appState.preserveClipboard)
+                        .padding(.top, 2)
+                    Text("Pasting briefly puts the transcript on your clipboard. With this on, \(AppName.displayName) restores whatever was there before.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             Divider()
-                .padding(.vertical, 2)
 
-            Toggle("Say \"press enter\" to submit after paste", isOn: $appState.isPressEnterVoiceCommandEnabled)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Press Return after dictation")
+                    .font(.caption.weight(.semibold))
+                Picker("", selection: returnBehaviorBinding) {
+                    Text("Never").tag(ReturnBehavior.never)
+                    Text("Only when I say \u{201C}press enter\u{201D}").tag(ReturnBehavior.onCommand)
+                    Text("Always").tag(ReturnBehavior.always)
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .frame(maxWidth: 320, alignment: .leading)
 
-            Text("When the transcription ends with \"press enter\", \(AppName.displayName) removes those words before cleanup, inserts the remaining transcript, then presses Return.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                Text(returnBehaviorHelp)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
+    }
+
+    private var returnBehaviorHelp: String {
+        if appState.alwaysPressEnterAfterPaste {
+            return "Presses Return automatically after every dictation — great for sending messages or running searches."
+        }
+        if appState.isPressEnterVoiceCommandEnabled {
+            return "Only presses Return when your dictation ends with the words \u{201C}press enter\u{201D}."
+        }
+        return "Never presses Return — your dictation is just inserted."
     }
 
     // MARK: Microphone
