@@ -20,6 +20,22 @@ struct OfflineModelInfo: Identifiable, Hashable {
     let recommended: Bool
 }
 
+/// A recommended local cleanup model (downloadable via Ollama on demand).
+struct CleanupModelInfo: Identifiable, Hashable {
+    let id: String        // Ollama tag, e.g. "llama3.2:3b"
+    let name: String
+    let detail: String
+    let speed: Int        // 1...5
+    let recommended: Bool
+}
+
+/// Progress of an in-app Ollama model download.
+enum OllamaPullState: Equatable {
+    case idle
+    case pulling(model: String, fraction: Double, status: String) // fraction < 0 = indeterminate
+    case failed(model: String, message: String)
+}
+
 /// A local LLM discovered via Ollama, usable for offline text cleanup.
 struct OllamaModelInfo: Identifiable, Hashable {
     let id: String        // model name, e.g. "gemma4:e4b"
@@ -297,6 +313,16 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let autoOfflineFallbackEnabledStorageKey = "auto_offline_fallback_enabled"
     static let defaultOfflineModelName = "openai_whisper-base"
     private let cleanupModelSelectionStorageKey = "cleanup_model_selection"
+
+    /// Curated small/fast instruct models recommended for offline text cleanup,
+    /// downloadable in-app via Ollama. (Reasoning models like qwen3 are excluded —
+    /// they "think" instead of returning clean text.)
+    static let cleanupModelCatalog: [CleanupModelInfo] = [
+        CleanupModelInfo(id: "llama3.2:1b", name: "Llama 3.2 (1B)", detail: "Ollama · ~1.3 GB · ultra-fast", speed: 5, recommended: false),
+        CleanupModelInfo(id: "gemma2:2b", name: "Gemma 2 (2B)", detail: "Ollama · ~1.6 GB · very fast", speed: 5, recommended: false),
+        CleanupModelInfo(id: "llama3.2:3b", name: "Llama 3.2 (3B)", detail: "Ollama · ~2 GB · fast & accurate", speed: 4, recommended: true),
+        CleanupModelInfo(id: "qwen2.5:3b", name: "Qwen 2.5 (3B)", detail: "Ollama · ~2 GB · accurate", speed: 4, recommended: false)
+    ]
 
     /// Maps old/short/flaky model names to reliable WhisperKit folder identifiers
     /// so existing installs keep working (and the flaky compressed turbo that
@@ -609,6 +635,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
     /// Local LLMs discovered via Ollama (refreshed by refreshOllamaModels()).
     @Published var availableOllamaModels: [OllamaModelInfo] = []
+
+    /// Whether the Ollama server responded on the last scan.
+    @Published var ollamaReachable = false
+
+    /// Progress of an in-app Ollama model download.
+    @Published var ollamaPullState: OllamaPullState = .idle
 
     /// Automatically switch to offline transcription when cloud requests fail
     /// (e.g. on a VPN that blocks the provider), then switch back when the
@@ -1256,9 +1288,58 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 let (data, _) = try await URLSession.shared.data(for: request)
                 let decoded = try JSONDecoder().decode(TagsResponse.self, from: data)
                 let models = decoded.models.map { OllamaModelInfo(id: $0.name, sizeBytes: $0.size ?? 0) }
-                await MainActor.run { self?.availableOllamaModels = models }
+                await MainActor.run {
+                    self?.availableOllamaModels = models
+                    self?.ollamaReachable = true
+                }
             } catch {
-                await MainActor.run { self?.availableOllamaModels = [] }
+                await MainActor.run {
+                    self?.availableOllamaModels = []
+                    self?.ollamaReachable = false
+                }
+            }
+        }
+    }
+
+    /// Downloads a model into Ollama (with progress), then selects it for cleanup.
+    func pullOllamaModel(_ name: String) {
+        guard let url = URL(string: "http://localhost:11434/api/pull") else { return }
+        ollamaPullState = .pulling(model: name, fraction: -1, status: "Starting…")
+        Task { [weak self] in
+            guard let self else { return }
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try? JSONSerialization.data(withJSONObject: ["name": name, "stream": true])
+            request.timeoutInterval = 3600
+            do {
+                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                    await MainActor.run { self.ollamaPullState = .failed(model: name, message: "Ollama couldn't download \(name).") }
+                    return
+                }
+                for try await line in bytes.lines {
+                    guard let data = line.data(using: .utf8),
+                          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                    if let errorMessage = obj["error"] as? String {
+                        await MainActor.run { self.ollamaPullState = .failed(model: name, message: errorMessage) }
+                        return
+                    }
+                    let status = (obj["status"] as? String) ?? ""
+                    let completed = (obj["completed"] as? NSNumber)?.doubleValue
+                    let total = (obj["total"] as? NSNumber)?.doubleValue
+                    let fraction = (completed != nil && total != nil && total! > 0) ? completed! / total! : -1
+                    await MainActor.run {
+                        self.ollamaPullState = .pulling(model: name, fraction: fraction, status: status)
+                    }
+                }
+                await MainActor.run {
+                    self.ollamaPullState = .idle
+                    self.cleanupModelSelection = "ollama:\(name)"
+                }
+                self.refreshOllamaModels()
+            } catch {
+                await MainActor.run { self.ollamaPullState = .failed(model: name, message: error.localizedDescription) }
             }
         }
     }

@@ -1025,10 +1025,11 @@ struct GeneralSettingsView: View {
                     .font(.caption.weight(.semibold))
                     .padding(.top, 2)
 
+                // Apple's built-in model (zero setup) — the recommended default.
                 if LocalPostProcessingService.isAvailable {
                     modelSelectRow(
-                        title: "Apple on-device", detail: "Built-in · no setup needed",
-                        speed: 4, accuracy: nil, recommended: false,
+                        title: "Apple on-device", detail: "Built-in · no download needed",
+                        speed: 4, accuracy: nil, recommended: true,
                         selected: appState.cleanupModelSelection == "apple"
                     ) { appState.cleanupModelSelection = "apple" }
                 } else {
@@ -1036,24 +1037,96 @@ struct GeneralSettingsView: View {
                         .font(.caption).foregroundStyle(.orange)
                 }
 
-                ForEach(appState.availableOllamaModels) { model in
+                Text("Local models (via Ollama)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+
+                // Curated, downloadable small/fast models.
+                ForEach(AppState.cleanupModelCatalog) { model in
+                    cleanupCatalogRow(model)
+                }
+
+                // Any other models the user already has installed.
+                ForEach(otherInstalledOllamaModels) { model in
                     modelSelectRow(
-                        title: model.id, detail: "Ollama (local) · \(model.sizeText)",
+                        title: model.id, detail: "Ollama · \(model.sizeText) · already installed",
                         speed: model.speed, accuracy: nil, recommended: false,
                         selected: appState.cleanupModelSelection == "ollama:\(model.id)"
                     ) { appState.cleanupModelSelection = "ollama:\(model.id)" }
                 }
 
-                if appState.availableOllamaModels.isEmpty {
-                    Text("No Ollama models found. For fast local cleanup, install Ollama and run: ollama pull llama3.2:3b")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Text("Tip: use a small instruct model (≈1–3B) for speed — e.g. ollama pull llama3.2:3b. Gemma works well; reasoning models like qwen3 aren't ideal for cleanup.")
+                if !appState.ollamaReachable {
+                    Text("Install Ollama from ollama.com to download these local cleanup models. Apple's built-in option works without it.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
         .onAppear { appState.refreshOllamaModels() }
+    }
+
+    private var isPullingAnyModel: Bool {
+        if case .pulling = appState.ollamaPullState { return true }
+        return false
+    }
+
+    private var otherInstalledOllamaModels: [OllamaModelInfo] {
+        let catalogIDs = Set(AppState.cleanupModelCatalog.map { $0.id })
+        return appState.availableOllamaModels.filter { !catalogIDs.contains($0.id) }
+    }
+
+    @ViewBuilder
+    private func cleanupCatalogRow(_ model: CleanupModelInfo) -> some View {
+        if appState.availableOllamaModels.contains(where: { $0.id == model.id }) {
+            modelSelectRow(
+                title: model.name, detail: model.detail.replacingOccurrences(of: "Ollama · ", with: "Ollama · installed · "),
+                speed: model.speed, accuracy: nil, recommended: model.recommended,
+                selected: appState.cleanupModelSelection == "ollama:\(model.id)"
+            ) { appState.cleanupModelSelection = "ollama:\(model.id)" }
+        } else {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(model.name).font(.callout.weight(.medium))
+                        if model.recommended {
+                            Text("Recommended")
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    Text(model.detail).font(.caption).foregroundStyle(.secondary)
+                    ratingGauge("Speed", model.speed)
+
+                    switch appState.ollamaPullState {
+                    case .pulling(let pulling, let fraction, let status) where pulling == model.id:
+                        if fraction >= 0 {
+                            ProgressView(value: fraction).progressViewStyle(.linear).frame(maxWidth: 240)
+                            Text("Downloading… \(Int((fraction * 100).rounded()))%")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        } else {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text(status.isEmpty ? "Starting…" : status).font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                    case .failed(let failedModel, let message) where failedModel == model.id:
+                        Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(2)
+                        Button("Retry download") { appState.pullOllamaModel(model.id) }.controlSize(.small)
+                    default:
+                        Button("Download") { appState.pullOllamaModel(model.id) }
+                            .controlSize(.small)
+                            .disabled(!appState.ollamaReachable || isPullingAnyModel)
+                    }
+                }
+                Spacer()
+            }
+            .padding(8)
+        }
     }
 
     @ViewBuilder
