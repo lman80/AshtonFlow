@@ -4,7 +4,8 @@ import WhisperKit
 /// UI-facing state of the local Whisper model (shown in Settings).
 enum LocalModelState: Equatable {
     case notLoaded
-    case preparing
+    case downloading(Double)   // 0...1 download fraction
+    case loading               // downloaded; loading into memory
     case ready
     case failed(String)
 }
@@ -49,27 +50,50 @@ actor LocalTranscriptionService {
         return entries.contains { $0.lowercased().contains(needle) }
     }
 
+    private var loadingTask: Task<WhisperKit, Error>?
+
     /// Switch the model; drops the loaded instance so the next prepare() reloads.
     func setModel(_ name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != modelName else { return }
         modelName = trimmed
         whisperKit = nil
+        loadingTask = nil
     }
 
-    /// Loads the model into memory, downloading it on first use. Safe to call
-    /// repeatedly; subsequent calls return the cached instance.
+    /// Downloads (with progress) on first use, then loads the model into memory.
+    /// Safe to call repeatedly and concurrently — a single in-flight load is
+    /// shared so we never download the same model twice at once.
     @discardableResult
-    func prepare() async throws -> WhisperKit {
-        if let whisperKit { return whisperKit }
+    func prepare(
+        onProgress: (@Sendable (Double) -> Void)? = nil,
+        onLoading: (@Sendable () -> Void)? = nil
+    ) async throws -> WhisperKit {
+        if let whisperKit {
+            onLoading?()
+            return whisperKit
+        }
+        if let loadingTask {
+            return try await loadingTask.value
+        }
+        let name = modelName
+        let task = Task { () throws -> WhisperKit in
+            // Download (incremental — skips files already present) with progress.
+            let folder = try await WhisperKit.download(variant: name, progressCallback: { progress in
+                onProgress?(progress.fractionCompleted)
+            })
+            // Load the downloaded model into memory.
+            onLoading?()
+            return try await WhisperKit(WhisperKitConfig(modelFolder: folder.path))
+        }
+        loadingTask = task
         do {
-            let config = WhisperKitConfig(model: modelName, download: true)
-            let kit = try await WhisperKit(config)
-            // If a concurrent call finished first, keep that one.
-            if let existing = whisperKit { return existing }
+            let kit = try await task.value
             whisperKit = kit
+            loadingTask = nil
             return kit
         } catch {
+            loadingTask = nil
             throw LocalTranscriptionError.modelNotReady(error.localizedDescription)
         }
     }

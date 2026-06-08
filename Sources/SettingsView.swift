@@ -972,27 +972,43 @@ struct GeneralSettingsView: View {
                     ) { appState.offlineModelName = model.id }
                 }
 
-                HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     switch appState.localModelState {
                     case .notLoaded:
-                        Button("Download model") { appState.prepareLocalModel() }
-                            .controlSize(.small)
-                        Text("Downloads once (needs internet)")
+                        HStack(spacing: 8) {
+                            Button("Download model") { appState.prepareLocalModel() }
+                                .controlSize(.small)
+                            Text("Downloads once (needs internet)")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    case .downloading(let fraction):
+                        Text("Downloading model… \(Int((fraction * 100).rounded()))%")
+                            .font(.caption.weight(.semibold))
+                        ProgressView(value: fraction)
+                            .progressViewStyle(.linear)
+                            .frame(maxWidth: 320)
+                        Text("First time only — it runs offline after this.")
                             .font(.caption).foregroundStyle(.secondary)
-                    case .preparing:
-                        ProgressView().controlSize(.small)
-                        Text("Preparing model…")
-                            .font(.caption).foregroundStyle(.secondary)
+                    case .loading:
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Loading model into memory…")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     case .ready:
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                        Text("Model ready — works offline")
-                            .font(.caption).foregroundStyle(.green)
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                            Text("Model ready — works offline")
+                                .font(.caption).foregroundStyle(.green)
+                        }
                     case .failed(let message):
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                        Text(message)
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                        Button("Retry") { appState.prepareLocalModel() }
-                            .controlSize(.small)
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                            Text(message)
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                            Button("Retry") { appState.prepareLocalModel() }
+                                .controlSize(.small)
+                        }
                     }
                 }
             }

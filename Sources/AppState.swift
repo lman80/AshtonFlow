@@ -298,23 +298,28 @@ final class AppState: ObservableObject, @unchecked Sendable {
     static let defaultOfflineModelName = "openai_whisper-base"
     private let cleanupModelSelectionStorageKey = "cleanup_model_selection"
 
-    /// Maps old short model names (pre–full-identifier) to the exact WhisperKit
-    /// folder identifiers so existing installs keep their downloaded model.
+    /// Maps old/short/flaky model names to reliable WhisperKit folder identifiers
+    /// so existing installs keep working (and the flaky compressed turbo that
+    /// failed to download is redirected to the standard turbo).
     static let offlineModelMigration: [String: String] = [
         "tiny": "openai_whisper-tiny",
         "base": "openai_whisper-base",
         "small": "openai_whisper-small",
-        "large-v3-turbo": "openai_whisper-large-v3-v20240930_turbo_632MB"
+        "large-v3-turbo": "openai_whisper-large-v3_turbo",
+        "openai_whisper-large-v3-v20240930_turbo_632MB": "openai_whisper-large-v3_turbo",
+        "openai_whisper-large-v3-v20240930_626MB": "openai_whisper-large-v3",
+        "distil-whisper_distil-large-v3_turbo": "distil-whisper_distil-large-v3"
     ]
 
-    /// Curated on-device Whisper models with speed/accuracy ratings (1–5).
+    /// Curated on-device Whisper models (reliable standard variants) with
+    /// speed/accuracy ratings (1–5).
     static let offlineModelCatalog: [OfflineModelInfo] = [
-        OfflineModelInfo(id: "openai_whisper-tiny", name: "Tiny", detail: "Multilingual · ~75 MB", speed: 5, accuracy: 2, recommended: false),
+        OfflineModelInfo(id: "openai_whisper-tiny", name: "Tiny", detail: "Multilingual · ~75 MB · fastest", speed: 5, accuracy: 2, recommended: false),
         OfflineModelInfo(id: "openai_whisper-base", name: "Base", detail: "Multilingual · ~145 MB", speed: 4, accuracy: 3, recommended: false),
-        OfflineModelInfo(id: "openai_whisper-small", name: "Small", detail: "Multilingual · ~470 MB", speed: 3, accuracy: 4, recommended: false),
-        OfflineModelInfo(id: "distil-whisper_distil-large-v3_turbo", name: "Distil Large v3 Turbo", detail: "English-focused · ~600 MB", speed: 4, accuracy: 4, recommended: false),
-        OfflineModelInfo(id: "openai_whisper-large-v3-v20240930_turbo_632MB", name: "Large v3 Turbo", detail: "Multilingual · ~630 MB · best balance", speed: 3, accuracy: 5, recommended: true),
-        OfflineModelInfo(id: "openai_whisper-large-v3-v20240930", name: "Large v3", detail: "Multilingual · most accurate · ~1.5 GB", speed: 2, accuracy: 5, recommended: false)
+        OfflineModelInfo(id: "openai_whisper-small", name: "Small", detail: "Multilingual · ~470 MB · great balance", speed: 3, accuracy: 4, recommended: true),
+        OfflineModelInfo(id: "distil-whisper_distil-large-v3", name: "Distil Large v3", detail: "English-focused · ~750 MB", speed: 4, accuracy: 4, recommended: false),
+        OfflineModelInfo(id: "openai_whisper-large-v3_turbo", name: "Large v3 Turbo", detail: "Multilingual · ~1.5 GB · fast + very accurate", speed: 3, accuracy: 5, recommended: false),
+        OfflineModelInfo(id: "openai_whisper-large-v3", name: "Large v3", detail: "Multilingual · most accurate · ~3 GB", speed: 2, accuracy: 5, recommended: false)
     ]
     private let shortcutStartDelayStorageKey = "shortcut_start_delay"
     private let preserveClipboardStorageKey = "preserve_clipboard"
@@ -1215,11 +1220,21 @@ final class AppState: ObservableObject, @unchecked Sendable {
     /// `localModelState` for the UI. Triggered when Offline mode is turned on or
     /// from the Settings "Download model" button.
     func prepareLocalModel() {
-        localModelState = .preparing
+        localModelState = .downloading(0)
         Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.localTranscriptionService.prepare()
+                try await self.localTranscriptionService.prepare(
+                    onProgress: { fraction in
+                        Task { @MainActor in
+                            if case .loading = self.localModelState { return } // already past download
+                            self.localModelState = .downloading(fraction)
+                        }
+                    },
+                    onLoading: {
+                        Task { @MainActor in self.localModelState = .loading }
+                    }
+                )
                 await MainActor.run { self.localModelState = .ready }
             } catch {
                 await MainActor.run { self.localModelState = .failed(error.localizedDescription) }
