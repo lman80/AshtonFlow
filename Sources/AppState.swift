@@ -10,6 +10,39 @@ import Network
 import os.log
 private let recordingLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "Recording")
 
+/// A selectable on-device Whisper model with speed/accuracy ratings (1–5).
+struct OfflineModelInfo: Identifiable, Hashable {
+    let id: String        // exact WhisperKit model identifier
+    let name: String
+    let detail: String
+    let speed: Int
+    let accuracy: Int
+    let recommended: Bool
+}
+
+/// A local LLM discovered via Ollama, usable for offline text cleanup.
+struct OllamaModelInfo: Identifiable, Hashable {
+    let id: String        // model name, e.g. "gemma4:e4b"
+    let sizeBytes: Int
+
+    var sizeText: String {
+        guard sizeBytes > 0 else { return "" }
+        return String(format: "%.1f GB", Double(sizeBytes) / 1_000_000_000)
+    }
+
+    /// Rough speed rating (1–5) — smaller models run faster.
+    var speed: Int {
+        let gb = Double(sizeBytes) / 1_000_000_000
+        switch gb {
+        case ..<2: return 5
+        case ..<4: return 4
+        case ..<7: return 3
+        case ..<11: return 2
+        default: return 1
+        }
+    }
+}
+
 /// Optional modifier held during dictation to press Return that time only.
 enum QuickSendModifier: String, CaseIterable, Identifiable {
     case off, shift, option, control, command
@@ -262,8 +295,27 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let offlineModelNameStorageKey = "offline_model_name"
     private let offlineCleanupEnabledStorageKey = "offline_cleanup_enabled"
     private let autoOfflineFallbackEnabledStorageKey = "auto_offline_fallback_enabled"
-    static let defaultOfflineModelName = "base"
-    static let offlineModelOptions = ["tiny", "base", "small", "large-v3-turbo"]
+    static let defaultOfflineModelName = "openai_whisper-base"
+    private let cleanupModelSelectionStorageKey = "cleanup_model_selection"
+
+    /// Maps old short model names (pre–full-identifier) to the exact WhisperKit
+    /// folder identifiers so existing installs keep their downloaded model.
+    static let offlineModelMigration: [String: String] = [
+        "tiny": "openai_whisper-tiny",
+        "base": "openai_whisper-base",
+        "small": "openai_whisper-small",
+        "large-v3-turbo": "openai_whisper-large-v3-v20240930_turbo_632MB"
+    ]
+
+    /// Curated on-device Whisper models with speed/accuracy ratings (1–5).
+    static let offlineModelCatalog: [OfflineModelInfo] = [
+        OfflineModelInfo(id: "openai_whisper-tiny", name: "Tiny", detail: "Multilingual · ~75 MB", speed: 5, accuracy: 2, recommended: false),
+        OfflineModelInfo(id: "openai_whisper-base", name: "Base", detail: "Multilingual · ~145 MB", speed: 4, accuracy: 3, recommended: false),
+        OfflineModelInfo(id: "openai_whisper-small", name: "Small", detail: "Multilingual · ~470 MB", speed: 3, accuracy: 4, recommended: false),
+        OfflineModelInfo(id: "distil-whisper_distil-large-v3_turbo", name: "Distil Large v3 Turbo", detail: "English-focused · ~600 MB", speed: 4, accuracy: 4, recommended: false),
+        OfflineModelInfo(id: "openai_whisper-large-v3-v20240930_turbo_632MB", name: "Large v3 Turbo", detail: "Multilingual · ~630 MB · best balance", speed: 3, accuracy: 5, recommended: true),
+        OfflineModelInfo(id: "openai_whisper-large-v3-v20240930", name: "Large v3", detail: "Multilingual · most accurate · ~1.5 GB", speed: 2, accuracy: 5, recommended: false)
+    ]
     private let shortcutStartDelayStorageKey = "shortcut_start_delay"
     private let preserveClipboardStorageKey = "preserve_clipboard"
     private let pressEnterVoiceCommandStorageKey = "press_enter_voice_command_enabled"
@@ -544,6 +596,15 @@ final class AppState: ObservableObject, @unchecked Sendable {
         didSet { UserDefaults.standard.set(offlineCleanupEnabled, forKey: offlineCleanupEnabledStorageKey) }
     }
 
+    /// Which engine/model does offline cleanup: "apple" (built-in) or
+    /// "ollama:<model>" (a local Ollama model).
+    @Published var cleanupModelSelection: String {
+        didSet { UserDefaults.standard.set(cleanupModelSelection, forKey: cleanupModelSelectionStorageKey) }
+    }
+
+    /// Local LLMs discovered via Ollama (refreshed by refreshOllamaModels()).
+    @Published var availableOllamaModels: [OllamaModelInfo] = []
+
     /// Automatically switch to offline transcription when cloud requests fail
     /// (e.g. on a VPN that blocks the provider), then switch back when the
     /// connection changes. The user's manual offline toggle always wins.
@@ -814,7 +875,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let offlineModeEnabled = UserDefaults.standard.bool(forKey: offlineModeEnabledStorageKey)
         let storedOfflineModelName = UserDefaults.standard.string(forKey: offlineModelNameStorageKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let offlineModelName = storedOfflineModelName.isEmpty ? Self.defaultOfflineModelName : storedOfflineModelName
+        let rawOfflineModelName = storedOfflineModelName.isEmpty ? Self.defaultOfflineModelName : storedOfflineModelName
+        let offlineModelName = Self.offlineModelMigration[rawOfflineModelName] ?? rawOfflineModelName
+        let cleanupModelSelection = UserDefaults.standard.string(forKey: cleanupModelSelectionStorageKey) ?? "apple"
         let offlineCleanupEnabled = UserDefaults.standard.object(forKey: offlineCleanupEnabledStorageKey) == nil
             ? true
             : UserDefaults.standard.bool(forKey: offlineCleanupEnabledStorageKey)
@@ -911,6 +974,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.screenRecordingEnabled = screenRecordingEnabled
         self.offlineModeEnabled = offlineModeEnabled
         self.offlineModelName = offlineModelName
+        self.cleanupModelSelection = cleanupModelSelection
         self.offlineCleanupEnabled = offlineCleanupEnabled
         self.autoOfflineFallbackEnabled = autoOfflineFallbackEnabled
         self.localTranscriptionService = LocalTranscriptionService(modelName: offlineModelName)
@@ -1159,6 +1223,27 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 await MainActor.run { self.localModelState = .ready }
             } catch {
                 await MainActor.run { self.localModelState = .failed(error.localizedDescription) }
+            }
+        }
+    }
+
+    /// Scans Ollama (if running) for installed models, for the cleanup picker.
+    func refreshOllamaModels() {
+        Task { [weak self] in
+            guard let url = URL(string: "http://localhost:11434/api/tags") else { return }
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 3
+            struct TagsResponse: Decodable {
+                struct Model: Decodable { let name: String; let size: Int? }
+                let models: [Model]
+            }
+            do {
+                let (data, _) = try await URLSession.shared.data(for: request)
+                let decoded = try JSONDecoder().decode(TagsResponse.self, from: data)
+                let models = decoded.models.map { OllamaModelInfo(id: $0.name, sizeBytes: $0.size ?? 0) }
+                await MainActor.run { self?.availableOllamaModels = models }
+            } catch {
+                await MainActor.run { self?.availableOllamaModels = [] }
             }
         }
     }
@@ -2783,38 +2868,72 @@ final class AppState: ObservableObject, @unchecked Sendable {
             return ("", .skippedEmptyRawTranscript, "")
         }
 
-        // Offline: clean up on-device with Apple's Foundation Models when
-        // available and enabled; otherwise fall back to the raw transcript.
+        // Offline: clean up using the selected engine (Apple's built-in model or
+        // a local Ollama model); otherwise fall back to the raw transcript.
         if isOfflineActive {
             if let macro = findMatchingMacro(for: trimmedRawTranscript) {
                 return (macro.payload, .voiceMacro(command: macro.command), "")
             }
-            guard offlineCleanupEnabled, LocalPostProcessingService.isAvailable else {
+            guard offlineCleanupEnabled else {
+                return (trimmedRawTranscript, .skippedOffline, "")
+            }
+
+            var command: (invocation: CommandInvocation, selectedText: String)?
+            if case .command(let invocation, let selectedText) = intent {
+                command = (invocation, selectedText)
+            }
+
+            // Local Ollama model (OpenAI-compatible) when selected.
+            if cleanupModelSelection.hasPrefix("ollama:") {
+                let model = String(cleanupModelSelection.dropFirst("ollama:".count))
+                let ollama = PostProcessingService(
+                    apiKey: "ollama",
+                    baseURL: "http://localhost:11434/v1",
+                    preferredModel: model,
+                    preferredFallbackModel: model
+                )
+                if let command {
+                    do {
+                        let result = try await ollama.commandTransform(
+                            selectedText: command.selectedText, voiceCommand: rawTranscript,
+                            context: context, customVocabulary: customVocabulary, outputLanguage: outputLanguage)
+                        return (result.transcript, .commandModeSucceeded(invocation: command.invocation), result.prompt)
+                    } catch {
+                        os_log(.error, log: recordingLog, "Ollama edit mode failed: %{public}@", error.localizedDescription)
+                        return (command.selectedText, .commandModeFailedFallback(invocation: command.invocation), "")
+                    }
+                }
+                do {
+                    let result = try await ollama.postProcess(
+                        transcript: trimmedRawTranscript, context: context,
+                        customVocabulary: customVocabulary, customSystemPrompt: customSystemPrompt, outputLanguage: outputLanguage)
+                    return (result.transcript, .postProcessingSucceeded, result.prompt)
+                } catch {
+                    os_log(.error, log: recordingLog, "Ollama cleanup failed: %{public}@", error.localizedDescription)
+                    return (trimmedRawTranscript, .skippedOffline, "")
+                }
+            }
+
+            // Apple's built-in on-device model.
+            guard LocalPostProcessingService.isAvailable else {
                 return (trimmedRawTranscript, .skippedOffline, "")
             }
             let localService = LocalPostProcessingService()
-            if case .command(let invocation, let selectedText) = intent {
+            if let command {
                 do {
                     let transformed = try await localService.transform(
-                        selectedText: selectedText,
-                        voiceCommand: rawTranscript,
-                        customVocabulary: customVocabulary,
-                        outputLanguage: outputLanguage
-                    )
-                    return (transformed, .commandModeSucceeded(invocation: invocation), "")
+                        selectedText: command.selectedText, voiceCommand: rawTranscript,
+                        customVocabulary: customVocabulary, outputLanguage: outputLanguage)
+                    return (transformed, .commandModeSucceeded(invocation: command.invocation), "")
                 } catch {
                     os_log(.error, log: recordingLog, "Offline edit mode failed: %{public}@", error.localizedDescription)
-                    return (selectedText, .commandModeFailedFallback(invocation: invocation), "")
+                    return (command.selectedText, .commandModeFailedFallback(invocation: command.invocation), "")
                 }
             }
             do {
                 let cleaned = try await localService.cleanup(
-                    transcript: trimmedRawTranscript,
-                    contextSummary: context.contextSummary,
-                    customVocabulary: customVocabulary,
-                    customSystemPrompt: customSystemPrompt,
-                    outputLanguage: outputLanguage
-                )
+                    transcript: trimmedRawTranscript, contextSummary: context.contextSummary,
+                    customVocabulary: customVocabulary, customSystemPrompt: customSystemPrompt, outputLanguage: outputLanguage)
                 return (cleaned, .postProcessingSucceeded, "")
             } catch {
                 os_log(.error, log: recordingLog, "Offline cleanup failed: %{public}@", error.localizedDescription)

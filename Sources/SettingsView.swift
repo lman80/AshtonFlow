@@ -958,37 +958,26 @@ struct GeneralSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            Divider()
-
-            Toggle("Clean up text on-device when offline", isOn: $appState.offlineCleanupEnabled)
-            Text("Uses Apple's built-in on-device AI to clean up dictation and run Edit Mode while offline — same cleanup and Edit Mode settings as online. \(LocalPostProcessingService.availability.statusMessage)")
-                .font(.caption)
-                .foregroundStyle(LocalPostProcessingService.isAvailable ? Color.secondary : Color.orange)
-
             if appState.offlineModeEnabled || appState.autoOfflineFallbackEnabled {
                 Divider()
 
-                HStack(spacing: 8) {
-                    Text("Model")
-                        .font(.caption.weight(.semibold))
-                    Picker("Model", selection: $appState.offlineModelName) {
-                        ForEach(AppState.offlineModelOptions, id: \.self) { name in
-                            Text(name).tag(name)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(maxWidth: 220)
+                Text("Transcription model")
+                    .font(.caption.weight(.semibold))
+                ForEach(AppState.offlineModelCatalog) { model in
+                    modelSelectRow(
+                        title: model.name, detail: model.detail,
+                        speed: model.speed, accuracy: model.accuracy,
+                        recommended: model.recommended,
+                        selected: appState.offlineModelName == model.id
+                    ) { appState.offlineModelName = model.id }
                 }
-                Text("Larger models are more accurate but slower and bigger to download.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
 
                 HStack(spacing: 8) {
                     switch appState.localModelState {
                     case .notLoaded:
                         Button("Download model") { appState.prepareLocalModel() }
                             .controlSize(.small)
-                        Text("Needs internet once")
+                        Text("Downloads once (needs internet)")
                             .font(.caption).foregroundStyle(.secondary)
                     case .preparing:
                         ProgressView().controlSize(.small)
@@ -1007,7 +996,100 @@ struct GeneralSettingsView: View {
                     }
                 }
             }
+
+            Divider()
+
+            Toggle("Clean up text after dictation (offline)", isOn: $appState.offlineCleanupEnabled)
+            Text("Cleans up dictation and runs Edit Mode while offline, using the same prompt/vocabulary settings as online.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if appState.offlineCleanupEnabled {
+                Text("Cleanup model")
+                    .font(.caption.weight(.semibold))
+                    .padding(.top, 2)
+
+                if LocalPostProcessingService.isAvailable {
+                    modelSelectRow(
+                        title: "Apple on-device", detail: "Built-in · no setup needed",
+                        speed: 4, accuracy: nil, recommended: false,
+                        selected: appState.cleanupModelSelection == "apple"
+                    ) { appState.cleanupModelSelection = "apple" }
+                } else {
+                    Text(LocalPostProcessingService.availability.statusMessage)
+                        .font(.caption).foregroundStyle(.orange)
+                }
+
+                ForEach(appState.availableOllamaModels) { model in
+                    modelSelectRow(
+                        title: model.id, detail: "Ollama (local) · \(model.sizeText)",
+                        speed: model.speed, accuracy: nil, recommended: false,
+                        selected: appState.cleanupModelSelection == "ollama:\(model.id)"
+                    ) { appState.cleanupModelSelection = "ollama:\(model.id)" }
+                }
+
+                if appState.availableOllamaModels.isEmpty {
+                    Text("No Ollama models found. For fast local cleanup, install Ollama and run: ollama pull llama3.2:3b")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Tip: use a small instruct model (≈1–3B) for speed — e.g. ollama pull llama3.2:3b. Gemma works well; reasoning models like qwen3 aren't ideal for cleanup.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
         }
+        .onAppear { appState.refreshOllamaModels() }
+    }
+
+    @ViewBuilder
+    private func ratingGauge(_ label: String, _ value: Int) -> some View {
+        HStack(spacing: 3) {
+            Text(label)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 52, alignment: .leading)
+            HStack(spacing: 2) {
+                ForEach(0..<5, id: \.self) { index in
+                    Capsule()
+                        .fill(index < value ? Color.accentColor : Color.secondary.opacity(0.2))
+                        .frame(width: 12, height: 4)
+                }
+            }
+        }
+    }
+
+    private func modelSelectRow(
+        title: String, detail: String, speed: Int, accuracy: Int?,
+        recommended: Bool, selected: Bool, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(title).font(.callout.weight(.medium))
+                        if recommended {
+                            Text("Recommended")
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 14) {
+                        ratingGauge("Speed", speed)
+                        if let accuracy { ratingGauge("Accuracy", accuracy) }
+                    }
+                }
+                Spacer()
+            }
+            .padding(8)
+            .background(RoundedRectangle(cornerRadius: 8).fill(selected ? Color.accentColor.opacity(0.08) : Color.clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var apiKeySection: some View {
