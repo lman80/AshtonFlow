@@ -1312,9 +1312,30 @@ struct GeneralSettingsView: View {
 
     private var clipboardSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Toggle("Preserve clipboard after paste", isOn: $appState.preserveClipboard)
+            Toggle("Type text directly (don't use the clipboard)", isOn: $appState.directTypeInsteadOfPaste)
 
-            Text("\(AppName.displayName) will temporarily place the transcript on your clipboard to paste it, then restore whatever was there before. If you copy something else before the restore happens, \(AppName.displayName) leaves it alone.")
+            Text("Inserts dictated text by simulating keystrokes, so your clipboard is never touched — handy if you like to copy and paste right after dictating. Slightly slower for very long text, and a few apps handle simulated typing differently.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Divider()
+                .padding(.vertical, 2)
+
+            Toggle("Preserve clipboard after paste", isOn: $appState.preserveClipboard)
+                .disabled(appState.directTypeInsteadOfPaste)
+
+            Text(appState.directTypeInsteadOfPaste
+                ? "Not needed while \"Type text directly\" is on — the clipboard isn't used."
+                : "\(AppName.displayName) will temporarily place the transcript on your clipboard to paste it, then restore whatever was there before. If you copy something else before the restore happens, \(AppName.displayName) leaves it alone.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Divider()
+                .padding(.vertical, 2)
+
+            Toggle("Always press Return after paste", isOn: $appState.alwaysPressEnterAfterPaste)
+
+            Text("Presses Return automatically after each dictation is inserted — handy for sending messages or running searches.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -1323,7 +1344,7 @@ struct GeneralSettingsView: View {
 
             Toggle("Say \"press enter\" to submit after paste", isOn: $appState.isPressEnterVoiceCommandEnabled)
 
-            Text("When the transcription ends with \"press enter\", \(AppName.displayName) removes those words before cleanup, pastes the remaining transcript, then presses Return.")
+            Text("When the transcription ends with \"press enter\", \(AppName.displayName) removes those words before cleanup, inserts the remaining transcript, then presses Return.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

@@ -231,6 +231,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let shortcutStartDelayStorageKey = "shortcut_start_delay"
     private let preserveClipboardStorageKey = "preserve_clipboard"
     private let pressEnterVoiceCommandStorageKey = "press_enter_voice_command_enabled"
+    private let directTypeInsteadOfPasteStorageKey = "direct_type_insert"
+    private let alwaysPressEnterAfterPasteStorageKey = "always_press_enter_after_paste"
     private let alertSoundsEnabledStorageKey = "alert_sounds_enabled"
     private let soundVolumeStorageKey = "sound_volume"
     private let voiceMacrosStorageKey = "voice_macros"
@@ -594,6 +596,23 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// Insert the transcript by typing it directly (synthesized keystrokes)
+    /// instead of using the clipboard + Cmd-V. When on, the clipboard is never
+    /// touched by dictation.
+    @Published var directTypeInsteadOfPaste: Bool {
+        didSet {
+            UserDefaults.standard.set(directTypeInsteadOfPaste, forKey: directTypeInsteadOfPasteStorageKey)
+        }
+    }
+
+    /// Press Return after every dictation paste/insert (not only when you say
+    /// "press enter").
+    @Published var alwaysPressEnterAfterPaste: Bool {
+        didSet {
+            UserDefaults.standard.set(alwaysPressEnterAfterPaste, forKey: alwaysPressEnterAfterPasteStorageKey)
+        }
+    }
+
     @Published var alertSoundsEnabled: Bool {
         didSet {
             UserDefaults.standard.set(alertSoundsEnabled, forKey: alertSoundsEnabledStorageKey)
@@ -747,6 +766,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
             ? true
             : UserDefaults.standard.bool(forKey: autoOfflineFallbackEnabledStorageKey)
         let shortcutStartDelay = max(0, UserDefaults.standard.double(forKey: shortcutStartDelayStorageKey))
+        let directTypeInsteadOfPaste = UserDefaults.standard.bool(forKey: directTypeInsteadOfPasteStorageKey)
+        let alwaysPressEnterAfterPaste = UserDefaults.standard.bool(forKey: alwaysPressEnterAfterPasteStorageKey)
         let isCommandModeEnabled = UserDefaults.standard.object(forKey: commandModeEnabledStorageKey) == nil
             ? false
             : UserDefaults.standard.bool(forKey: commandModeEnabledStorageKey)
@@ -844,6 +865,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.realtimeStreamingModel = realtimeStreamingModel
         self.dictationAudioInterruptionEnabled = dictationAudioInterruptionEnabled
         self.isPressEnterVoiceCommandEnabled = isPressEnterVoiceCommandEnabled
+        self.directTypeInsteadOfPaste = directTypeInsteadOfPaste
+        self.alwaysPressEnterAfterPaste = alwaysPressEnterAfterPaste
         self.alertSoundsEnabled = alertSoundsEnabled
         self.soundVolume = soundVolume
         self.voiceMacros = initialMacros
@@ -3003,14 +3026,23 @@ final class AppState: ObservableObject, @unchecked Sendable {
                                 }
                             }
 
-                            let pendingClipboardRestore = self.writeTranscriptToPasteboard(trimmedFinalTranscript)
-                            self.pasteAtCursorWhenShortcutReleased {
-                                if shouldPressEnterAfterPaste {
-                                    self.pressEnterAfterPaste {
+                            let pressEnterNow = shouldPressEnterAfterPaste || self.alwaysPressEnterAfterPaste
+                            if self.directTypeInsteadOfPaste {
+                                // Type directly — never touches the clipboard.
+                                let textToInsert = Self.transcriptWithTrailingSpace(trimmedFinalTranscript)
+                                self.insertTextWhenShortcutReleased(textToInsert) {
+                                    if pressEnterNow { self.pressEnterAfterPaste() }
+                                }
+                            } else {
+                                let pendingClipboardRestore = self.writeTranscriptToPasteboard(trimmedFinalTranscript)
+                                self.pasteAtCursorWhenShortcutReleased {
+                                    if pressEnterNow {
+                                        self.pressEnterAfterPaste {
+                                            self.restoreClipboardIfNeeded(pendingClipboardRestore)
+                                        }
+                                    } else {
                                         self.restoreClipboardIfNeeded(pendingClipboardRestore)
                                     }
-                                } else {
-                                    self.restoreClipboardIfNeeded(pendingClipboardRestore)
                                 }
                             }
                         }
@@ -3474,6 +3506,38 @@ final class AppState: ObservableObject, @unchecked Sendable {
         keyUp?.post(tap: .cgSessionEventTap)
     }
 
+    /// Types text directly via synthesized Unicode keystrokes — no clipboard.
+    /// Posts in small chunks to stay within the event's unicode buffer.
+    private func typeText(_ text: String) {
+        guard !text.isEmpty else { return }
+        let source = CGEventSource(stateID: .hidSystemState)
+        let utf16 = Array(text.utf16)
+        let chunkSize = 18
+        var index = 0
+        while index < utf16.count {
+            let end = min(index + chunkSize, utf16.count)
+            var chunk = Array(utf16[index..<end])
+            if let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true) {
+                keyDown.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: &chunk)
+                keyDown.post(tap: .cgSessionEventTap)
+            }
+            if let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) {
+                keyUp.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: &chunk)
+                keyUp.post(tap: .cgSessionEventTap)
+            }
+            index = end
+        }
+    }
+
+    /// Trailing-space rule shared by clipboard paste and direct typing: add a
+    /// space after sentence-ending punctuation so the next dictation doesn't jam.
+    private static func transcriptWithTrailingSpace(_ transcript: String) -> String {
+        if let last = transcript.last, ".!?".contains(last) {
+            return transcript + " "
+        }
+        return transcript
+    }
+
     private func keyCodeForCharacter(_ character: String) -> CGKeyCode? {
         guard let char = character.lowercased().utf16.first else { return nil }
         let source = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
@@ -3523,12 +3587,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
         // Append a space when ending with sentence-ending punctuation so the
         // next dictation does not jam against the prior period.
-        let textToWrite: String
-        if let last = transcript.last, ".!?".contains(last) {
-            textToWrite = transcript + " "
-        } else {
-            textToWrite = transcript
-        }
+        let textToWrite = Self.transcriptWithTrailingSpace(transcript)
 
         // Declare standard transient types alongside .string so well-behaved
         // clipboard managers (Maccy, Raycast, Paste, Clipy, Flycut, etc.) skip
@@ -3604,6 +3663,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private func pasteAtCursorWhenShortcutReleased(completion: (() -> Void)? = nil) {
         performAfterShortcutReleased { [weak self] in
             self?.pasteAtCursor()
+            completion?()
+        }
+    }
+
+    private func insertTextWhenShortcutReleased(_ text: String, completion: (() -> Void)? = nil) {
+        performAfterShortcutReleased { [weak self] in
+            self?.typeText(text)
             completion?()
         }
     }
