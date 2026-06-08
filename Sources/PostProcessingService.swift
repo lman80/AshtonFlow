@@ -354,6 +354,81 @@ Behavior:
         return nil
     }
 
+    /// Minimal cleanup for small/local models: a short system prompt and just
+    /// the text as the user message (no context block, no "return EMPTY"), at
+    /// temperature 0, with any preamble/quotes stripped from the reply.
+    func simpleCleanup(text: String, instructions: String) async throws -> String {
+        let content = try await chatCompletion(system: instructions, user: text)
+        return Self.stripCleanupArtifacts(content)
+    }
+
+    /// Minimal Edit Mode transform for small/local models.
+    func simpleTransform(selectedText: String, voiceCommand: String, instructions: String) async throws -> String {
+        let user = """
+        TEXT:
+        \(selectedText)
+
+        INSTRUCTION: \(voiceCommand)
+        """
+        let content = try await chatCompletion(system: instructions, user: user)
+        return Self.stripCleanupArtifacts(content)
+    }
+
+    private func chatCompletion(system: String, user: String) async throws -> String {
+        var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = postProcessingTimeoutSeconds
+        let payload: [String: Any] = [
+            "model": resolvedPrimaryModel(),
+            "temperature": 0.0,
+            "stream": false,
+            "messages": [
+                ["role": "system", "content": system],
+                ["role": "user", "content": user]
+            ]
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
+        let (data, response) = try await LLMAPITransport.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw PostProcessingError.invalidResponse("No HTTP response")
+        }
+        guard http.statusCode == 200 else {
+            throw PostProcessingError.requestFailed(http.statusCode, String(data: data, encoding: .utf8) ?? "")
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let message = choices.first?["message"] as? [String: Any],
+              let content = message["content"] as? String else {
+            throw PostProcessingError.invalidResponse("Missing choices[0].message.content")
+        }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw PostProcessingError.emptyOutput }
+        return trimmed
+    }
+
+    /// Removes common small-model artifacts: a leading "Here is the text:" label
+    /// line and surrounding quotation marks.
+    private static func stripCleanupArtifacts(_ text: String) -> String {
+        var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let newline = result.firstIndex(of: "\n") {
+            let firstLine = result[result.startIndex..<newline].lowercased()
+            if firstLine.count < 60, firstLine.hasSuffix(":"),
+               firstLine.contains("clean") || firstLine.contains("here") || firstLine.contains("text")
+                || firstLine.contains("output") || firstLine.contains("result") || firstLine.contains("sure") {
+                result = String(result[result.index(after: newline)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        if (result.hasPrefix("\"") && result.hasSuffix("\"")) ||
+            (result.hasPrefix("“") && result.hasSuffix("”")) ||
+            (result.hasPrefix("'") && result.hasSuffix("'")),
+           result.count >= 2 {
+            result = String(result.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return result
+    }
+
     private func process(
         transcript: String,
         contextSummary: String,

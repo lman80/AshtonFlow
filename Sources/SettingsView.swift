@@ -436,6 +436,8 @@ struct SettingsView: View {
                     GeneralSettingsView(category: .textOutput)
                 case .transcription:
                     GeneralSettingsView(category: .transcription)
+                case .offline:
+                    GeneralSettingsView(category: .offline)
                 case .prompts:
                     PromptsSettingsView()
                 case .macros:
@@ -519,7 +521,7 @@ struct DebugSettingsView: View {
 // MARK: - General Settings
 
 enum GeneralSettingsCategory {
-    case main, dictation, textOutput, transcription
+    case main, dictation, textOutput, transcription, offline
 }
 
 struct GeneralSettingsView: View {
@@ -723,6 +725,7 @@ struct GeneralSettingsView: View {
                     SettingsCard("Custom Vocabulary", icon: "text.book.closed.fill") { vocabularySection }
                 case .transcription:
                     SettingsCard("API Key", icon: "key.fill") { apiKeySection }
+                case .offline:
                     SettingsCard("Offline Mode", icon: "wifi.slash") { offlineModeSection }
                 }
             }
@@ -1060,6 +1063,28 @@ struct GeneralSettingsView: View {
                     Text("Install Ollama from ollama.com to download these local cleanup models. Apple's built-in option works without it.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+
+                Divider().padding(.vertical, 2)
+
+                HStack {
+                    Text("Cleanup instructions")
+                        .font(.caption.weight(.semibold))
+                    Spacer()
+                    Button("Reset to default") {
+                        appState.offlineCleanupPrompt = AppState.defaultOfflineCleanupPrompt
+                    }
+                    .controlSize(.small)
+                    .disabled(appState.offlineCleanupPrompt == AppState.defaultOfflineCleanupPrompt)
+                }
+                TextEditor(text: $appState.offlineCleanupPrompt)
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(minHeight: 110, maxHeight: 180)
+                    .padding(6)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.25)))
+                Text("This is the prompt sent to the offline cleanup model. Small models do best with short, direct instructions like this.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .onAppear { appState.refreshOllamaModels() }
