@@ -50,6 +50,9 @@ struct PrecomputedMacro {
 
 enum SettingsTab: String, CaseIterable, Identifiable {
     case general
+    case dictation
+    case textOutput
+    case transcription
     case prompts
     case macros
     case runLog
@@ -66,6 +69,9 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .general: return "General"
+        case .dictation: return "Dictation"
+        case .textOutput: return "Text & Output"
+        case .transcription: return "Transcription"
         case .prompts: return "Prompts"
         case .macros: return "Voice Macros"
         case .runLog: return "Run Log"
@@ -76,6 +82,9 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general: return "gearshape"
+        case .dictation: return "mic.fill"
+        case .textOutput: return "text.cursor"
+        case .transcription: return "waveform"
         case .prompts: return "text.bubble"
         case .macros: return "music.mic"
         case .runLog: return "clock.arrow.circlepath"
