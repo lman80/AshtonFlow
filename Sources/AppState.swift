@@ -2162,11 +2162,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
         pendingManualCommandInvocation = hotkeyManager.currentPressedModifiers.contains(
             commandModeManualModifier.shortcutModifier
         )
-        if let sendModifier = quickSendModifier.shortcutModifier {
-            pendingSendThisSession = hotkeyManager.currentPressedModifiers.contains(sendModifier)
-        } else {
-            pendingSendThisSession = false
-        }
         pendingShortcutStartMode = mode
         let delay = shortcutStartDelay
 

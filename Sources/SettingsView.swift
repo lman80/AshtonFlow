@@ -1400,25 +1400,6 @@ struct GeneralSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Text("Quick-send key")
-                        .font(.caption.weight(.semibold))
-                    Picker("", selection: $appState.quickSendModifier) {
-                        ForEach(QuickSendModifier.allCases) { modifier in
-                            Text(modifier.title).tag(modifier)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(maxWidth: 150)
-                }
-                Text("Hold this key while dictating to press Return that time — no word needed, even if the setting above is “Never”.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
     }
 
