@@ -42,7 +42,9 @@ SPM_PRODUCT = AshtonFlow
 # Version stamped into the app. Bump VERSION for each release and tag the GitHub
 # release "v$(VERSION)" so the in-app updater (which compares CFBundleShortVersion
 # and the embedded FreeFlowBuildTag against GitHub Releases) detects it.
-VERSION ?= 1.0.0
+# Keep this >= the latest published GitHub Release so locally-built/dev copies are
+# never seen as "older" and auto-"updated" down to an older release.
+VERSION ?= 1.0.2
 BUILD_TAG ?= v$(VERSION)
 
 # Build against the full Xcode SDK when it's installed, so frameworks the
