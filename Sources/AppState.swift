@@ -321,6 +321,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let annotationShortcutStorageKey = "annotation_shortcut"
     private let savedAnnotationCustomShortcutStorageKey = "saved_annotation_custom_shortcut"
     private let annotationSensitivityStorageKey = "annotation_sensitivity"
+    private let annotationShowPathStorageKey = "annotation_show_path"
     private let annotationPreambleStorageKey = "annotation_preamble"
     private let customVocabularyStorageKey = "custom_vocabulary"
     private let transcriptionLanguageStorageKey = "transcription_language"
@@ -570,6 +571,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
             UserDefaults.standard.set(annotationSensitivity.rawValue, forKey: annotationSensitivityStorageKey)
             mouseGestureMonitor.sensitivity = annotationSensitivity
         }
+    }
+
+    /// Also draw the raw mouse-path line on each annotated screenshot. Off by
+    /// default — the highlight circle/box alone is cleaner and less distracting.
+    @Published var annotationShowPath: Bool {
+        didSet { UserDefaults.standard.set(annotationShowPath, forKey: annotationShowPathStorageKey) }
     }
 
     @Published var annotationPreamble: String {
@@ -1139,6 +1146,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             .flatMap { try? JSONDecoder().decode(ShortcutBinding.self, from: $0) }
         self.annotationSensitivity = AnnotationSensitivity(
             rawValue: UserDefaults.standard.string(forKey: "annotation_sensitivity") ?? "") ?? .medium
+        self.annotationShowPath = UserDefaults.standard.bool(forKey: "annotation_show_path")
         self.annotationPreamble = UserDefaults.standard.string(forKey: "annotation_preamble")
             ?? Self.defaultAnnotationPreamble
         self.isCommandModeEnabled = isCommandModeEnabled

@@ -136,6 +136,14 @@ struct SuperNotationView: View {
 
                 Divider()
 
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Draw the mouse path too", isOn: $appState.annotationShowPath)
+                    Text("Off by default — each screenshot gets a clean circle or box around the spot you circled. Turn on to also draw the line of exactly where your cursor moved.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                Divider()
+
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text("Prompt preamble")

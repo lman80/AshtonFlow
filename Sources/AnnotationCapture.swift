@@ -43,7 +43,7 @@ enum AnnotationCapture {
     /// soft circle. `screenFrame`/`scale` are the display's AppKit frame and
     /// backing scale (passed in so this can run off the main thread). Returns PNG
     /// data, or nil if capture failed (e.g. permission missing).
-    static func annotatedPNG(displayID: CGDirectDisplayID, screenFrame frame: CGRect, scale: CGFloat, path: [CGPoint]) -> Data? {
+    static func annotatedPNG(displayID: CGDirectDisplayID, screenFrame frame: CGRect, scale: CGFloat, path: [CGPoint], showPath: Bool = false) -> Data? {
         guard let shot = CGDisplayCreateImage(displayID) else { return nil }
 
         let pixelW = shot.width
@@ -73,23 +73,36 @@ enum AnnotationCapture {
             let padY = max(26 * scale, h * 0.14)
             let rect = CGRect(x: minX - padX, y: minY - padY, width: w + padX * 2, height: h + padY * 2)
 
-            // Soft highlight ellipse around the marked region — fits big or small
-            // circles and squares, and stays translucent so the screen shows through.
+            // Match the highlight shape to the gesture: a rounded box when the user
+            // drew a square (the path reaches the bbox corners), otherwise an
+            // ellipse for circles/scribbles. Translucent so the screen shows through.
+            let highlight: CGPath
+            if looksLikeSquare(gesture, minX: minX, minY: minY, width: w, height: h) {
+                let radius = min(rect.width, rect.height) * 0.10
+                highlight = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
+            } else {
+                highlight = CGPath(ellipseIn: rect, transform: nil)
+            }
+            ctx.addPath(highlight)
             ctx.setFillColor(NSColor.systemRed.withAlphaComponent(0.07).cgColor)
-            ctx.fillEllipse(in: rect)
-            ctx.setStrokeColor(NSColor.systemRed.withAlphaComponent(0.5).cgColor)
-            ctx.setLineWidth(max(3, 3.5 * scale))
-            ctx.strokeEllipse(in: rect)
-
-            // The gesture itself, translucent so it never hides what's underneath.
-            ctx.setStrokeColor(NSColor.systemRed.withAlphaComponent(0.4).cgColor)
-            ctx.setLineWidth(max(3.5, 4.5 * scale))
-            ctx.setLineCap(.round)
-            ctx.setLineJoin(.round)
-            ctx.beginPath()
-            ctx.move(to: gesture[0])
-            for p in gesture.dropFirst() { ctx.addLine(to: p) }
+            ctx.fillPath()
+            ctx.addPath(highlight)
+            ctx.setStrokeColor(NSColor.systemRed.withAlphaComponent(0.55).cgColor)
+            ctx.setLineWidth(max(3, 4 * scale))
             ctx.strokePath()
+
+            // Optionally draw the raw mouse path too (off by default — the shape
+            // highlight alone is cleaner). Translucent so it never hides content.
+            if showPath {
+                ctx.setStrokeColor(NSColor.systemRed.withAlphaComponent(0.4).cgColor)
+                ctx.setLineWidth(max(3.5, 4.5 * scale))
+                ctx.setLineCap(.round)
+                ctx.setLineJoin(.round)
+                ctx.beginPath()
+                ctx.move(to: gesture[0])
+                for p in gesture.dropFirst() { ctx.addLine(to: p) }
+                ctx.strokePath()
+            }
         }
 
         guard let out = ctx.makeImage() else { return nil }
@@ -118,6 +131,20 @@ enum AnnotationCapture {
         }
         let trimmed = Array(pts[start...])
         return trimmed.count >= 4 ? trimmed : pts
+    }
+
+    /// Did the gesture reach the corners of its bounding box (a square) rather
+    /// than staying mid-edge (a circle)? A square parks points in the tight
+    /// corner zones; a circle's diagonal only reaches ~85% out, so a tight 12%
+    /// zone separates them cleanly.
+    private static func looksLikeSquare(_ pts: [CGPoint], minX: CGFloat, minY: CGFloat, width w: CGFloat, height h: CGFloat) -> Bool {
+        guard w > 1, h > 1, pts.count >= 8 else { return false }
+        var corner = 0
+        for p in pts {
+            let nx = (p.x - minX) / w, ny = (p.y - minY) / h
+            if (nx < 0.12 || nx > 0.88) && (ny < 0.12 || ny > 0.88) { corner += 1 }
+        }
+        return Double(corner) / Double(pts.count) > 0.08
     }
 }
 

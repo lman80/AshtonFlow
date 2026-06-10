@@ -130,9 +130,10 @@ extension AppState {
         let frame = screen.frame
         let scale = screen.backingScaleFactor
         let dest = folder.appendingPathComponent(fileName)
+        let showPath = annotationShowPath
         DispatchQueue.global(qos: .userInitiated).async {
             guard let data = AnnotationCapture.annotatedPNG(
-                displayID: displayID, screenFrame: frame, scale: scale, path: points
+                displayID: displayID, screenFrame: frame, scale: scale, path: points, showPath: showPath
             ) else { return }
             try? data.write(to: dest)
         }
