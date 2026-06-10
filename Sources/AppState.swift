@@ -285,9 +285,23 @@ private enum SessionIntent {
     }
 }
 
+/// What happens to other audio when dictation starts.
+enum DictationAudioBehavior: String, CaseIterable, Identifiable, Codable {
+    case pauseMedia
+    case muteOutput
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .pauseMedia: return "Pause media"
+        case .muteOutput: return "Mute output"
+        }
+    }
+}
+
 final class AppState: ObservableObject, @unchecked Sendable {
     private enum ActiveAudioInterruption {
         case muted(previouslyMuted: Bool)
+        case pausedMedia
     }
 
     private let apiKeyStorageKey = "groq_api_key"
@@ -320,6 +334,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let offlineModeEnabledStorageKey = "offline_mode_enabled"
     private let offlineModelNameStorageKey = "offline_model_name"
     private let offlineCleanupEnabledStorageKey = "offline_cleanup_enabled"
+    private let onlineCleanupEnabledStorageKey = "online_cleanup_enabled"
     private let autoOfflineFallbackEnabledStorageKey = "auto_offline_fallback_enabled"
     static let defaultOfflineModelName = "openai_whisper-base"
     private let cleanupModelSelectionStorageKey = "cleanup_model_selection"
@@ -382,6 +397,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let realtimeStreamingEnabledStorageKey = "realtime_streaming_enabled"
     private let realtimeStreamingModelStorageKey = "realtime_streaming_model"
     private let dictationAudioInterruptionEnabledStorageKey = "dictation_audio_interruption_enabled"
+    private let dictationAudioBehaviorStorageKey = "dictation_audio_behavior"
     private let pasteAfterShortcutReleaseDelay: TimeInterval = 0.03
     private let pressEnterAfterPasteDelay: TimeInterval = 0.08
     private let clipboardRestoreDelay: TimeInterval = 1.0
@@ -814,6 +830,20 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// How dictation interrupts other audio: pause the media (default) or mute
+    /// the output device. Only applies when `dictationAudioInterruptionEnabled`.
+    @Published var dictationAudioBehavior: DictationAudioBehavior {
+        didSet {
+            UserDefaults.standard.set(dictationAudioBehavior.rawValue, forKey: dictationAudioBehaviorStorageKey)
+        }
+    }
+
+    /// Clean up dictation text with the cloud LLM after transcription (online).
+    /// Turn off to paste the raw transcript. Edit Mode and macros still work.
+    @Published var onlineCleanupEnabled: Bool {
+        didSet { UserDefaults.standard.set(onlineCleanupEnabled, forKey: onlineCleanupEnabledStorageKey) }
+    }
+
     @Published var preserveClipboard: Bool {
         didSet {
             UserDefaults.standard.set(preserveClipboard, forKey: preserveClipboardStorageKey)
@@ -1013,6 +1043,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let offlineCleanupEnabled = UserDefaults.standard.object(forKey: offlineCleanupEnabledStorageKey) == nil
             ? true
             : UserDefaults.standard.bool(forKey: offlineCleanupEnabledStorageKey)
+        let onlineCleanupEnabled = UserDefaults.standard.object(forKey: onlineCleanupEnabledStorageKey) == nil
+            ? true
+            : UserDefaults.standard.bool(forKey: onlineCleanupEnabledStorageKey)
         let autoOfflineFallbackEnabled = UserDefaults.standard.object(forKey: autoOfflineFallbackEnabledStorageKey) == nil
             ? true
             : UserDefaults.standard.bool(forKey: autoOfflineFallbackEnabledStorageKey)
@@ -1035,9 +1068,14 @@ final class AppState: ObservableObject, @unchecked Sendable {
             : UserDefaults.standard.bool(forKey: preserveClipboardStorageKey)
         let realtimeStreamingEnabled = UserDefaults.standard.bool(forKey: realtimeStreamingEnabledStorageKey)
         let realtimeStreamingModel = UserDefaults.standard.string(forKey: realtimeStreamingModelStorageKey) ?? ""
-        let dictationAudioInterruptionEnabled = UserDefaults.standard.bool(
-            forKey: dictationAudioInterruptionEnabledStorageKey
-        )
+        // Default ON (pause other audio) so dictation is clean out of the box;
+        // respect an explicit opt-out from before this default existed.
+        let dictationAudioInterruptionEnabled = UserDefaults.standard.object(forKey: dictationAudioInterruptionEnabledStorageKey) == nil
+            ? true
+            : UserDefaults.standard.bool(forKey: dictationAudioInterruptionEnabledStorageKey)
+        let dictationAudioBehavior = DictationAudioBehavior(
+            rawValue: UserDefaults.standard.string(forKey: dictationAudioBehaviorStorageKey) ?? ""
+        ) ?? .pauseMedia
         let isPressEnterVoiceCommandEnabled = UserDefaults.standard.object(forKey: pressEnterVoiceCommandStorageKey) == nil
             ? true
             : UserDefaults.standard.bool(forKey: pressEnterVoiceCommandStorageKey)
@@ -1118,6 +1156,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.cleanupModelSelection = cleanupModelSelection
         self.offlineCleanupPrompt = offlineCleanupPrompt
         self.offlineCleanupEnabled = offlineCleanupEnabled
+        self.onlineCleanupEnabled = onlineCleanupEnabled
         self.autoOfflineFallbackEnabled = autoOfflineFallbackEnabled
         self.localTranscriptionService = LocalTranscriptionService(modelName: offlineModelName)
         self.customSystemPromptLastModified = customSystemPromptLastModified
@@ -1128,6 +1167,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.realtimeStreamingEnabled = realtimeStreamingEnabled
         self.realtimeStreamingModel = realtimeStreamingModel
         self.dictationAudioInterruptionEnabled = dictationAudioInterruptionEnabled
+        self.dictationAudioBehavior = dictationAudioBehavior
         self.isPressEnterVoiceCommandEnabled = isPressEnterVoiceCommandEnabled
         self.directTypeInsteadOfPaste = directTypeInsteadOfPaste
         self.alwaysPressEnterAfterPaste = alwaysPressEnterAfterPaste
@@ -2860,11 +2900,22 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private func applyAudioInterruptionIfNeeded() {
         guard dictationAudioInterruptionEnabled, activeAudioInterruption == nil else { return }
 
-        let wasMuted = SystemAudioStatus.isDefaultOutputMuted()
-        if wasMuted {
-            activeAudioInterruption = .muted(previouslyMuted: true)
-        } else if SystemAudioStatus.setDefaultOutputMuted(true) {
-            activeAudioInterruption = .muted(previouslyMuted: false)
+        switch dictationAudioBehavior {
+        case .pauseMedia:
+            // Only send Pause when audio is actually playing, so we never
+            // accidentally *start* something. Pausing (rather than muting) also
+            // keeps Bluetooth headphones out of low-quality call mode.
+            if SystemAudioStatus.isDefaultOutputRunningSomewhere() {
+                MediaController.sendPlayPause()
+                activeAudioInterruption = .pausedMedia
+            }
+        case .muteOutput:
+            let wasMuted = SystemAudioStatus.isDefaultOutputMuted()
+            if wasMuted {
+                activeAudioInterruption = .muted(previouslyMuted: true)
+            } else if SystemAudioStatus.setDefaultOutputMuted(true) {
+                activeAudioInterruption = .muted(previouslyMuted: false)
+            }
         }
     }
 
@@ -2877,6 +2928,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
             if !previouslyMuted {
                 _ = SystemAudioStatus.setDefaultOutputMuted(false)
             }
+        case .pausedMedia:
+            MediaController.sendPlayPause() // resume
         }
     }
 
@@ -3155,11 +3208,14 @@ final class AppState: ObservableObject, @unchecked Sendable {
         case commandModeSucceeded(invocation: CommandInvocation)
         case commandModeFailedFallback(invocation: CommandInvocation)
         case skippedOffline
+        case skippedCleanupDisabled
 
         func statusMessage(isRetry: Bool = false) -> String {
             switch self {
             case .skippedOffline:
                 return "Offline mode: transcription only (no rewrite)"
+            case .skippedCleanupDisabled:
+                return "Cleanup off: transcription only (no rewrite)"
             case .skippedEmptyRawTranscript:
                 return "Skipped macros and post-processing for empty raw transcript"
             case .voiceMacro(let command):
@@ -3296,7 +3352,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
             os_log(.info, log: recordingLog, "Voice macro triggered: %{public}@", macro.command)
             return (macro.payload, .voiceMacro(command: macro.command), "")
         }
-        
+
+        // Cleanup turned off → paste the raw transcript (Edit Mode + macros above
+        // still run; this only skips the dictation rewrite).
+        guard onlineCleanupEnabled else {
+            return (trimmedRawTranscript, .skippedCleanupDisabled, "")
+        }
+
         do {
             let result = try await postProcessingService.postProcess(
                 transcript: trimmedRawTranscript,

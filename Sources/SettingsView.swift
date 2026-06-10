@@ -721,6 +721,7 @@ struct GeneralSettingsView: View {
                     SettingsCard("Recording Overlay", icon: "rectangle.dashed") { overlaySection }
                     SettingsCard("Sound Volume", icon: "speaker.wave.2.fill") { soundVolumeSection }
                 case .textOutput:
+                    SettingsCard("Text Cleanup", icon: "wand.and.stars") { cleanupSection }
                     SettingsCard("Clipboard", icon: "doc.on.clipboard") { clipboardSection }
                     SettingsCard("Output Language", icon: "globe") { outputLanguageSection }
                     SettingsCard("Edit Mode", icon: "pencil") { commandModeSection }
@@ -1409,16 +1410,44 @@ struct GeneralSettingsView: View {
 
     // MARK: Audio During Dictation
 
+    private var cleanupSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle("Clean up text after dictation", isOn: $appState.onlineCleanupEnabled)
+            Text("After transcribing, \(AppName.displayName) rewrites your dictation with the cloud model to fix grammar, punctuation, capitalization, and filler words. Turn this off to paste the raw transcription instead. Edit Mode and voice macros still work either way.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("Offline mode has its own cleanup toggle in the Offline Mode tab.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private var dictationAudioSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Toggle(
-                "Mute audio when dictation starts",
+                "Pause other audio when dictation starts",
                 isOn: $appState.dictationAudioInterruptionEnabled
             )
 
-            Text("\(AppName.displayName) restores the audio state it changed when dictation ends.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if appState.dictationAudioInterruptionEnabled {
+                Picker("", selection: $appState.dictationAudioBehavior) {
+                    ForEach(DictationAudioBehavior.allCases) { behavior in
+                        Text(behavior.title).tag(behavior)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                Text(appState.dictationAudioBehavior == .pauseMedia
+                    ? "Pauses whatever is playing — music, video, podcasts — and resumes it when you finish. Unlike muting, this stops playback, so AirPods and other headphones don't drop your background audio to call quality."
+                    : "Mutes the output device while you dictate, then unmutes when you finish. Media keeps playing silently.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Other audio keeps playing while you dictate.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

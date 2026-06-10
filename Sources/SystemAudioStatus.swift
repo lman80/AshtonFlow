@@ -51,6 +51,26 @@ enum SystemAudioStatus {
         return status == noErr
     }
 
+    /// Whether the default output device currently has active audio IO — i.e.
+    /// something is (or was just) playing through it. Used to decide whether to
+    /// send a Pause so we never accidentally *start* playback.
+    static func isDefaultOutputRunningSomewhere() -> Bool {
+        guard let deviceID = defaultOutputDeviceID() else { return false }
+
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        guard AudioObjectHasProperty(deviceID, &address) else { return false }
+
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &value)
+        return status == noErr && value != 0
+    }
+
     static func defaultOutputVolume() -> Float? {
         guard let deviceID = defaultOutputDeviceID() else { return nil }
 
