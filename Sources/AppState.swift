@@ -103,6 +103,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case textOutput
     case transcription
     case offline
+    case superNotation
     case prompts
     case macros
     case runLog
@@ -123,6 +124,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .textOutput: return "Text & Output"
         case .transcription: return "Transcription"
         case .offline: return "Offline Mode"
+        case .superNotation: return "SuperNotation"
         case .prompts: return "Prompts"
         case .macros: return "Voice Macros"
         case .runLog: return "Run Log"
@@ -137,6 +139,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .textOutput: return "text.cursor"
         case .transcription: return "waveform"
         case .offline: return "wifi.slash"
+        case .superNotation: return "scribble.variable"
         case .prompts: return "text.bubble"
         case .macros: return "music.mic"
         case .runLog: return "clock.arrow.circlepath"
@@ -301,6 +304,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let savedHoldCustomShortcutStorageKey = "saved_hold_custom_shortcut"
     private let savedToggleCustomShortcutStorageKey = "saved_toggle_custom_shortcut"
     private let savedCopyAgainCustomShortcutStorageKey = "saved_copy_again_custom_shortcut"
+    private let annotationShortcutStorageKey = "annotation_shortcut"
+    private let savedAnnotationCustomShortcutStorageKey = "saved_annotation_custom_shortcut"
+    private let annotationSensitivityStorageKey = "annotation_sensitivity"
+    private let annotationPreambleStorageKey = "annotation_preamble"
     private let customVocabularyStorageKey = "custom_vocabulary"
     private let transcriptionLanguageStorageKey = "transcription_language"
     private let selectedMicrophoneStorageKey = "selected_microphone_id"
@@ -516,6 +523,67 @@ final class AppState: ObservableObject, @unchecked Sendable {
             persistOptionalShortcut(savedCopyAgainCustomShortcut, key: savedCopyAgainCustomShortcutStorageKey)
         }
     }
+
+    // MARK: - SuperNotation (AI annotation)
+
+    static let defaultAnnotationPreamble = """
+    I'm building an app and recorded a spoken walkthrough while pointing at my screen. \
+    Each time I circled my cursor over something, a screenshot was captured with a red \
+    mark showing exactly where I was pointing. Below is what I said, with each screenshot \
+    referenced inline at the moment I took it. Please read the walkthrough, look at the \
+    screenshots, and help me with what I'm describing.
+    """
+
+    /// Dedicated global shortcut that starts/stops an annotation session — tap to
+    /// toggle, or press-and-hold. Fully independent of the dictation shortcuts.
+    @Published var annotationShortcut: ShortcutBinding {
+        didSet {
+            persistShortcut(annotationShortcut, key: annotationShortcutStorageKey)
+            restartAnnotationHotkeyMonitoring()
+        }
+    }
+
+    @Published var savedAnnotationCustomShortcut: ShortcutBinding? {
+        didSet {
+            persistOptionalShortcut(savedAnnotationCustomShortcut, key: savedAnnotationCustomShortcutStorageKey)
+        }
+    }
+
+    @Published var annotationSensitivity: AnnotationSensitivity {
+        didSet {
+            UserDefaults.standard.set(annotationSensitivity.rawValue, forKey: annotationSensitivityStorageKey)
+            mouseGestureMonitor.sensitivity = annotationSensitivity
+        }
+    }
+
+    @Published var annotationPreamble: String {
+        didSet { UserDefaults.standard.set(annotationPreamble, forKey: annotationPreambleStorageKey) }
+    }
+
+    /// True while an annotation session is actively recording.
+    @Published var isAnnotating = false
+
+    /// Short status detail shown while annotating (e.g. "3 screenshots").
+    @Published var annotationStatusDetail = ""
+
+    /// All saved SuperNotation sessions, newest first (drives the gallery tab).
+    @Published var superNotationSessions: [AnnotationSession] = []
+
+    // Annotation runtime — internal so the SuperNotation extension can drive it.
+    let annotationHotkeyManager = HotkeyManager()
+    let annotationRecorder = AudioRecorder()
+    let mouseGestureMonitor = MouseGestureMonitor()
+    let superNotationStore = SuperNotationStore.shared
+    var annotationSessionID = ""
+    var annotationSessionFolder: URL?
+    var annotationStartMonotonic: CFTimeInterval = 0
+    var annotationStartDate = Date()
+    var annotationShots: [AnnotationShot] = []
+    var annotationShotCounter = 0
+    var annotationLatched = false
+    var annotationPendingHold = false
+    var annotationActivationMonotonic: CFTimeInterval = 0
+    var annotationFinishing = false
 
     @Published var isCommandModeEnabled: Bool {
         didSet {
@@ -1027,6 +1095,14 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.savedHoldCustomShortcut = savedHoldCustomShortcut.binding
         self.savedToggleCustomShortcut = savedToggleCustomShortcut.binding
         self.savedCopyAgainCustomShortcut = savedCopyAgainCustomShortcut.binding
+        self.annotationShortcut = (UserDefaults.standard.data(forKey: "annotation_shortcut")
+            .flatMap { try? JSONDecoder().decode(ShortcutBinding.self, from: $0) }) ?? .disabled
+        self.savedAnnotationCustomShortcut = UserDefaults.standard.data(forKey: "saved_annotation_custom_shortcut")
+            .flatMap { try? JSONDecoder().decode(ShortcutBinding.self, from: $0) }
+        self.annotationSensitivity = AnnotationSensitivity(
+            rawValue: UserDefaults.standard.string(forKey: "annotation_sensitivity") ?? "") ?? .medium
+        self.annotationPreamble = UserDefaults.standard.string(forKey: "annotation_preamble")
+            ?? Self.defaultAnnotationPreamble
         self.isCommandModeEnabled = isCommandModeEnabled
         self.commandModeStyle = commandModeStyle
         self.commandModeManualModifier = commandModeManualModifier
@@ -2207,6 +2283,20 @@ final class AppState: ObservableObject, @unchecked Sendable {
             self?.handleEscapeKeyPress() ?? false
         }
         restartHotkeyMonitoring()
+
+        // The annotation shortcut runs on its own independent HotkeyManager so it
+        // can never interfere with dictation. We feed it the annotation key as its
+        // "hold" binding; key-down/up arrive as holdActivated/holdDeactivated.
+        annotationHotkeyManager.onShortcutEvent = { [weak self] event in
+            DispatchQueue.main.async {
+                switch event {
+                case .holdActivated: self?.annotationKeyDown()
+                case .holdDeactivated: self?.annotationKeyUp()
+                default: break
+                }
+            }
+        }
+        restartAnnotationHotkeyMonitoring()
     }
 
     func stopHotkeyMonitoring() {
@@ -2215,16 +2305,20 @@ final class AppState: ObservableObject, @unchecked Sendable {
         hotkeyManager.onShortcutEvent = nil
         hotkeyManager.onEscapeKeyPressed = nil
         hotkeyManager.stop()
+        annotationHotkeyManager.onShortcutEvent = nil
+        annotationHotkeyManager.stop()
     }
 
     func suspendHotkeyMonitoringForShortcutCapture() {
         isCapturingShortcut = true
         restartHotkeyMonitoring()
+        restartAnnotationHotkeyMonitoring()
     }
 
     func resumeHotkeyMonitoringAfterShortcutCapture() {
         isCapturingShortcut = false
         restartHotkeyMonitoring()
+        restartAnnotationHotkeyMonitoring()
     }
 
     private var activeShortcutConfiguration: ShortcutConfiguration {
@@ -2256,6 +2350,18 @@ final class AppState: ObservableObject, @unchecked Sendable {
             hotkeyMonitoringErrorMessage = error.localizedDescription
             os_log(.error, log: recordingLog, "Hotkey monitoring failed to start: %{public}@", error.localizedDescription)
         }
+    }
+
+    /// Starts/stops the dedicated annotation hotkey on its own independent tap so
+    /// it can never disturb dictation. The annotation key is fed as the "hold"
+    /// binding; the matcher emits holdActivated/holdDeactivated on press/release.
+    func restartAnnotationHotkeyMonitoring() {
+        guard shouldMonitorHotkeys, !isCapturingShortcut, !annotationShortcut.isDisabled else {
+            annotationHotkeyManager.stop()
+            return
+        }
+        let config = ShortcutConfiguration(hold: annotationShortcut, toggle: .disabled, copyAgain: .disabled)
+        try? annotationHotkeyManager.start(configuration: config)
     }
 
     private func handleShortcutEvent(_ event: ShortcutEvent) {

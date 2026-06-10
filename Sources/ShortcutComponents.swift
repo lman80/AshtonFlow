@@ -135,7 +135,7 @@ struct ShortcutRoleSection: View {
     }
 }
 
-private struct ShortcutPresetRow: View {
+struct ShortcutPresetRow: View {
     let title: String
     let isSelected: Bool
     let action: () -> Void
@@ -161,7 +161,7 @@ private struct ShortcutPresetRow: View {
     }
 }
 
-private struct ShortcutCaptureRow: View {
+struct ShortcutCaptureRow: View {
     let savedBinding: ShortcutBinding?
     let isSelected: Bool
     @Binding var isCapturing: Bool

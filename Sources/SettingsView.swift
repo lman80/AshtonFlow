@@ -4,7 +4,7 @@ import ServiceManagement
 
 // MARK: - Shared Helpers
 
-private struct SettingsCard<Content: View>: View {
+struct SettingsCard<Content: View>: View {
     let title: String
     let icon: String
     let content: Content
@@ -438,6 +438,8 @@ struct SettingsView: View {
                     GeneralSettingsView(category: .transcription)
                 case .offline:
                     GeneralSettingsView(category: .offline)
+                case .superNotation:
+                    SuperNotationView()
                 case .prompts:
                     PromptsSettingsView()
                 case .macros:

@@ -122,6 +122,12 @@ struct MenuBarView: View {
                 NotificationCenter.default.post(name: .showTranscribeAudio, object: nil)
             }
 
+            if appState.isAnnotating {
+                Button("Stop Annotation & Copy Prompt") { appState.toggleAnnotation() }
+            } else if !appState.annotationShortcut.isDisabled {
+                Button("Start Annotation") { appState.toggleAnnotation() }
+            }
+
             Toggle("Offline Mode (local)", isOn: $appState.offlineModeEnabled)
 
             if !appState.offlineModeEnabled && appState.autoOfflineActive {
