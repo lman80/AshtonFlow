@@ -62,34 +62,62 @@ enum AnnotationCapture {
         let pts = path.map { CGPoint(x: ($0.x - frame.minX) * scale, y: ($0.y - frame.minY) * scale) }
 
         if pts.count > 1 {
-            // Soft highlight circle around where the user was pointing.
-            let xs = pts.map(\.x), ys = pts.map(\.y)
+            // Trim the lead-in "approach" stroke so it doesn't leave a stray line
+            // or inflate the highlight (see gesturePoints).
+            let gesture = gesturePoints(pts)
+            let xs = gesture.map(\.x), ys = gesture.map(\.y)
             let minX = xs.min() ?? 0, maxX = xs.max() ?? 0
             let minY = ys.min() ?? 0, maxY = ys.max() ?? 0
-            let center = CGPoint(x: (minX + maxX) / 2, y: (minY + maxY) / 2)
-            let radius = max(hypot(maxX - minX, maxY - minY) / 2 + 26 * scale, 56 * scale)
-            let circleRect = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
+            let w = maxX - minX, h = maxY - minY
+            let padX = max(26 * scale, w * 0.14)
+            let padY = max(26 * scale, h * 0.14)
+            let rect = CGRect(x: minX - padX, y: minY - padY, width: w + padX * 2, height: h + padY * 2)
 
-            ctx.setFillColor(NSColor.systemRed.withAlphaComponent(0.10).cgColor)
-            ctx.fillEllipse(in: circleRect)
-            ctx.setStrokeColor(NSColor.systemRed.withAlphaComponent(0.55).cgColor)
+            // Soft highlight ellipse around the marked region — fits big or small
+            // circles and squares, and stays translucent so the screen shows through.
+            ctx.setFillColor(NSColor.systemRed.withAlphaComponent(0.07).cgColor)
+            ctx.fillEllipse(in: rect)
+            ctx.setStrokeColor(NSColor.systemRed.withAlphaComponent(0.5).cgColor)
             ctx.setLineWidth(max(3, 3.5 * scale))
-            ctx.strokeEllipse(in: circleRect)
+            ctx.strokeEllipse(in: rect)
 
-            // The actual scribble/circle the user drew.
-            ctx.setStrokeColor(NSColor.systemRed.withAlphaComponent(0.85).cgColor)
-            ctx.setLineWidth(max(4, 5 * scale))
+            // The gesture itself, translucent so it never hides what's underneath.
+            ctx.setStrokeColor(NSColor.systemRed.withAlphaComponent(0.4).cgColor)
+            ctx.setLineWidth(max(3.5, 4.5 * scale))
             ctx.setLineCap(.round)
             ctx.setLineJoin(.round)
             ctx.beginPath()
-            ctx.move(to: pts[0])
-            for p in pts.dropFirst() { ctx.addLine(to: p) }
+            ctx.move(to: gesture[0])
+            for p in gesture.dropFirst() { ctx.addLine(to: p) }
             ctx.strokePath()
         }
 
         guard let out = ctx.makeImage() else { return nil }
         let rep = NSBitmapImageRep(cgImage: out)
         return rep.representation(using: .png, properties: [:])
+    }
+
+    /// Drops the lead-in "approach" stroke — the contiguous start of the path
+    /// that lands outside the region the gesture actually occupies. That region
+    /// is estimated from the bounding box of the latter (gesture-dominated) part
+    /// of the path, since the approach is always at the very start. Robust for
+    /// circles and squares, big or small, and won't over-trim a clean gesture.
+    private static func gesturePoints(_ pts: [CGPoint]) -> [CGPoint] {
+        guard pts.count > 8 else { return pts }
+        let tail = Array(pts.suffix(max(4, Int(Double(pts.count) * 0.6))))
+        let txs = tail.map(\.x), tys = tail.map(\.y)
+        var minX = txs.min() ?? 0, maxX = txs.max() ?? 0
+        var minY = tys.min() ?? 0, maxY = tys.max() ?? 0
+        let ex = (maxX - minX) * 0.12 + 1, ey = (maxY - minY) * 0.12 + 1
+        minX -= ex; maxX += ex; minY -= ey; maxY += ey
+        var start = 0
+        while start < pts.count - 1 {
+            let p = pts[start]
+            if p.x >= minX, p.x <= maxX, p.y >= minY, p.y <= maxY { break }
+            start += 1
+        }
+        let trimmed = Array(pts[start...])
+        return trimmed.count >= 4 ? trimmed : pts
     }
 }
 
@@ -110,7 +138,7 @@ final class MouseGestureMonitor {
     private var globalMonitor: Any?
     private var localMonitor: Any?
 
-    private let window: CFTimeInterval = 1.4      // only consider the last 1.4s of motion
+    private let window: CFTimeInterval = 2.2      // last 2.2s of motion — room for slower, bigger circles
     private let cooldown: CFTimeInterval = 2.5    // min gap between captures
 
     func start() {
@@ -158,12 +186,13 @@ final class MouseGestureMonitor {
         let bboxH = (ys.max() ?? 0) - (ys.min() ?? 0)
         let diagonal = hypot(bboxW, bboxH)
 
-        // A circle/scribble = lots of travel (pathLength) packed into a small
-        // area (diagonal). A straight swipe has pathLength ≈ diagonal, so the
-        // ratio test rejects it.
-        guard diagonal > 25, diagonal < 560 else { return }
+        // A circle/scribble/square = lots of travel (pathLength) packed into a
+        // bounded area. A straight swipe has pathLength ≈ diagonal, so the ratio
+        // test rejects it while still allowing big loops and squares. (Circle
+        // ratio ≈ π, square ≈ 2.8; a straight drag ≈ 1.)
+        guard diagonal > 25, diagonal < 1500 else { return }
         guard pathLength > sensitivity.minPathLength else { return }
-        guard pathLength > diagonal * 2.1 else { return }
+        guard pathLength > diagonal * 2.0 else { return }
 
         lastTrigger = now
         let centroid = CGPoint(x: ((xs.min() ?? 0) + (xs.max() ?? 0)) / 2,
