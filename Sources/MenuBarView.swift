@@ -122,12 +122,13 @@ struct MenuBarView: View {
                 NotificationCenter.default.post(name: .showTranscribeAudio, object: nil)
             }
 
-            Button {
-                appState.offlineModeEnabled.toggle()
-            } label: {
-                Text(appState.offlineModeEnabled
-                    ? "✓ Offline Mode (local)"
-                    : (appState.autoOfflineActive ? "Offline Mode (local) — auto (no connection)" : "Offline Mode (local)"))
+            Toggle("Offline Mode (local)", isOn: $appState.offlineModeEnabled)
+
+            if !appState.offlineModeEnabled && appState.autoOfflineActive {
+                Text("No internet — using offline for now")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
             }
 
             if let hotkeyError = appState.hotkeyMonitoringErrorMessage {
@@ -192,183 +193,13 @@ struct MenuBarView: View {
 
             Divider()
 
-            Menu("Hold Shortcut") {
-                Button {
-                    _ = appState.setShortcut(.disabled, for: .hold)
-                } label: {
-                    if appState.holdShortcut.isDisabled {
-                        Text("✓ Disabled")
-                    } else {
-                        Text("  Disabled")
-                    }
-                }
-
-                ForEach(ShortcutPreset.allCases) { preset in
-                    Button {
-                        _ = appState.setShortcut(preset.binding, for: .hold)
-                    } label: {
-                        if appState.holdShortcut == preset.binding {
-                            Text("✓ \(preset.title)")
-                        } else {
-                            Text("  \(preset.title)")
-                        }
-                    }
-                    .disabled(preset.binding == appState.toggleShortcut)
-                }
-
-                if let savedCustomShortcut = appState.savedCustomShortcut(for: .hold) {
-                    Divider()
-                    Button {
-                        _ = appState.setShortcut(savedCustomShortcut, for: .hold)
-                    } label: {
-                        if appState.holdShortcut == savedCustomShortcut {
-                            Text("✓ Custom: \(savedCustomShortcut.displayName)")
-                        } else {
-                            Text("  Custom: \(savedCustomShortcut.displayName)")
-                        }
-                    }
-                }
-
-                Divider()
-                Button("Customize…") {
-                    appState.selectedSettingsTab = .general
-                    NotificationCenter.default.post(name: .showSettings, object: nil)
-                }
-            }
-
-            Menu("Toggle Shortcut") {
-                Button {
-                    _ = appState.setShortcut(.disabled, for: .toggle)
-                } label: {
-                    if appState.toggleShortcut.isDisabled {
-                        Text("✓ Disabled")
-                    } else {
-                        Text("  Disabled")
-                    }
-                }
-
-                ForEach(ShortcutPreset.allCases) { preset in
-                    Button {
-                        _ = appState.setShortcut(preset.binding, for: .toggle)
-                    } label: {
-                        if appState.toggleShortcut == preset.binding {
-                            Text("✓ \(preset.title)")
-                        } else {
-                            Text("  \(preset.title)")
-                        }
-                    }
-                    .disabled(preset.binding == appState.holdShortcut)
-                }
-
-                if let savedCustomShortcut = appState.savedCustomShortcut(for: .toggle) {
-                    Divider()
-                    Button {
-                        _ = appState.setShortcut(savedCustomShortcut, for: .toggle)
-                    } label: {
-                        if appState.toggleShortcut == savedCustomShortcut {
-                            Text("✓ Custom: \(savedCustomShortcut.displayName)")
-                        } else {
-                            Text("  Custom: \(savedCustomShortcut.displayName)")
-                        }
-                    }
-                }
-
-                Divider()
-                Button("Customize…") {
-                    appState.selectedSettingsTab = .general
-                    NotificationCenter.default.post(name: .showSettings, object: nil)
-                }
-            }
-
-            Menu("Paste Again Shortcut") {
-                Button {
-                    _ = appState.setShortcut(.disabled, for: .copyAgain)
-                } label: {
-                    if appState.copyAgainShortcut.isDisabled {
-                        Text("✓ Disabled")
-                    } else {
-                        Text("  Disabled")
-                    }
-                }
-
-                ForEach(ShortcutPreset.allCases) { preset in
-                    Button {
-                        _ = appState.setShortcut(preset.binding, for: .copyAgain)
-                    } label: {
-                        if appState.copyAgainShortcut == preset.binding {
-                            Text("✓ \(preset.title)")
-                        } else {
-                            Text("  \(preset.title)")
-                        }
-                    }
-                    .disabled(preset.binding == appState.holdShortcut || preset.binding == appState.toggleShortcut)
-                }
-
-                if let savedCustomShortcut = appState.savedCustomShortcut(for: .copyAgain) {
-                    Divider()
-                    Button {
-                        _ = appState.setShortcut(savedCustomShortcut, for: .copyAgain)
-                    } label: {
-                        if appState.copyAgainShortcut == savedCustomShortcut {
-                            Text("✓ Custom: \(savedCustomShortcut.displayName)")
-                        } else {
-                            Text("  Custom: \(savedCustomShortcut.displayName)")
-                        }
-                    }
-                }
-
-                Divider()
-                Button("Customize…") {
-                    appState.selectedSettingsTab = .general
-                    NotificationCenter.default.post(name: .showSettings, object: nil)
-                }
-            }
-
-            Menu("Microphone") {
-                Button {
-                    appState.selectedMicrophoneID = "default"
-                } label: {
-                    if appState.selectedMicrophoneID == "default" || appState.selectedMicrophoneID.isEmpty {
-                        Text("✓ System Default")
-                    } else {
-                        Text("  System Default")
-                    }
-                }
-                ForEach(appState.availableMicrophones) { device in
-                    Button {
-                        appState.selectedMicrophoneID = device.uid
-                    } label: {
-                        if appState.selectedMicrophoneID == device.uid {
-                            Text("✓ \(device.name)")
-                        } else {
-                            Text("  \(device.name)")
-                        }
-                    }
-                }
-            }
-
-            Button("Re-run Setup...") {
-                NotificationCenter.default.post(name: .showSetup, object: nil)
-            }
-
             Button("Settings") {
                 NotificationCenter.default.post(name: .showSettings, object: nil)
             }
 
-            Button {
-                Task {
-                    await updateManager.checkForUpdates(userInitiated: true)
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    if updateManager.isChecking {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
-                    Text(updateManager.isChecking ? "Checking for Updates..." : "Check for Updates")
-                }
+            Button("Send Feedback…") {
+                NotificationCenter.default.post(name: .showSendFeedback, object: nil)
             }
-            .disabled(updateManager.isChecking)
 
             if updateManager.updateAvailable {
                 Divider()

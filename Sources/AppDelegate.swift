@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
@@ -7,6 +8,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var transcribeAudioWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // SuperFeedback: in-app "Send Feedback…" → opens a GitHub Issue (with a
+        // screenshot) in this app's own repo, via the shared backend. No token or
+        // setup ships in the app; the backend holds the GitHub key.
+        SuperFeedback.configure(
+            backendURL: URL(string: "https://superfeedback.ashton-mcp-worker.workers.dev")!,
+            repo: "lman80/AshtonFlow",
+            app: AppName.displayName
+        )
+
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleShowSetup),
@@ -23,6 +33,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self,
             selector: #selector(handleShowTranscribeAudio),
             name: .showTranscribeAudio,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleShowSendFeedback),
+            name: .showSendFeedback,
             object: nil
         )
 
@@ -103,6 +119,72 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func handleShowTranscribeAudio() {
         showTranscribeAudioWindow()
+    }
+
+    // SuperFeedback — menu-bar app pattern (see SuperFeedback docs/menu-bar-apps.md,
+    // "Classic AppKit"): a self-contained NSAlert collects a message + type, captures
+    // the app window if one is open, and POSTs via SuperFeedback.send → opens a GitHub
+    // Issue in this app's repo. No window/style change needed for our menu.
+    @objc private func handleShowSendFeedback() {
+        NSApp.activate(ignoringOtherApps: true)
+        let screenshot = SuperFeedback.captureWindowPNG()   // nil is fine for a menu-bar app
+
+        let alert = NSAlert()
+        alert.messageText = "Send Feedback"
+        alert.informativeText = "Found a bug or have an idea? This opens an issue on \(AppName.displayName)'s GitHub" + (screenshot != nil ? ", with a screenshot of the current window." : ".")
+        alert.addButton(withTitle: "Send")
+        alert.addButton(withTitle: "Cancel")
+
+        // Accessory: a type picker over a multiline message box.
+        let width: CGFloat = 320
+        let typePopup = NSPopUpButton(frame: NSRect(x: 0, y: 118, width: 180, height: 25), pullsDown: false)
+        typePopup.addItems(withTitles: ["🐞 Bug", "✨ Feature request", "💬 Other"])
+
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: width, height: 108))
+        scroll.borderType = .bezelBorder
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: width, height: 108))
+        textView.font = .systemFont(ofSize: 13)
+        textView.isRichText = false
+        textView.textContainerInset = NSSize(width: 4, height: 6)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        scroll.documentView = textView
+
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 150))
+        accessory.addSubview(typePopup)
+        accessory.addSubview(scroll)
+        alert.accessoryView = accessory
+        alert.window.initialFirstResponder = textView
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let message = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return }
+
+        let type: String
+        switch typePopup.indexOfSelectedItem {
+        case 0: type = "bug"
+        case 1: type = "feature"
+        default: type = "other"
+        }
+
+        Task {
+            let result = await SuperFeedback.send(message: message, type: type, screenshot: screenshot)
+            await MainActor.run {
+                let done = NSAlert()
+                if result.ok {
+                    done.messageText = "Thanks for the feedback!"
+                    done.informativeText = result.url.map { "Opened \($0)" } ?? "Your report was sent."
+                } else {
+                    done.messageText = "Couldn't send feedback"
+                    done.informativeText = (result.error ?? "Unknown error.") + "\n\nPlease try again, or check your internet connection."
+                }
+                done.addButton(withTitle: "OK")
+                done.runModal()
+            }
+        }
     }
 
     private func showTranscribeAudioWindow() {

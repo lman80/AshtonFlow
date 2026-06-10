@@ -10,6 +10,15 @@ enum LocalModelState: Equatable {
     case failed(String)
 }
 
+/// State of switching to a *different* offline model: it downloads in the
+/// background while the current model keeps transcribing, then activates.
+enum ModelSwitchState: Equatable {
+    case idle
+    case downloading(model: String, fraction: Double)
+    case activating(model: String)
+    case failed(model: String, message: String)
+}
+
 enum LocalTranscriptionError: LocalizedError {
     case modelNotReady(String)
     case transcriptionFailed(String)
@@ -48,6 +57,18 @@ actor LocalTranscriptionService {
         }
         let needle = modelName.lowercased()
         return entries.contains { $0.lowercased().contains(needle) }
+    }
+
+    /// Download a model's files to disk (incremental — skips files already
+    /// present) WITHOUT touching the active model, so a newly-picked model can
+    /// download in the background while the current one keeps transcribing.
+    nonisolated static func ensureDownloaded(
+        _ name: String,
+        onProgress: @Sendable @escaping (Double) -> Void
+    ) async throws {
+        _ = try await WhisperKit.download(variant: name, progressCallback: { progress in
+            onProgress(progress.fractionCompleted)
+        })
     }
 
     private var loadingTask: Task<WhisperKit, Error>?

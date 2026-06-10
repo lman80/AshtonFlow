@@ -23,9 +23,12 @@ private struct StatusHUDView: View {
         .padding(.vertical, 9)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
+        .compositingGroup()
         .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
         .fixedSize()
-        .padding(6)
+        // Generous transparent margin so the soft shadow has room to render and
+        // isn't clipped into a hard rectangle by the (smaller) window frame.
+        .padding(20)
     }
 }
 
@@ -38,7 +41,7 @@ final class StatusHUD {
     private var dismissWork: DispatchWorkItem?
     private let state = StatusHUDState()
 
-    func show(_ text: String, systemImage: String, duration: TimeInterval = 2.2) {
+    func show(_ text: String, systemImage: String, duration: TimeInterval? = 2.2) {
         if Thread.isMainThread {
             present(text, systemImage: systemImage, duration: duration)
         } else {
@@ -48,7 +51,27 @@ final class StatusHUD {
         }
     }
 
-    private func present(_ text: String, systemImage: String, duration: TimeInterval) {
+    /// Show a persistent status that stays up until you call `hide()` or show
+    /// something else. Use it to narrate ongoing work (downloading, loading…) so
+    /// the user always knows what's happening instead of seeing a bare spinner.
+    func showProgress(_ text: String, systemImage: String) {
+        show(text, systemImage: systemImage, duration: nil)
+    }
+
+    /// Fade out whatever is currently showing.
+    func hide() {
+        if Thread.isMainThread {
+            dismissWork?.cancel()
+            fadeOut()
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.dismissWork?.cancel()
+                self?.fadeOut()
+            }
+        }
+    }
+
+    private func present(_ text: String, systemImage: String, duration: TimeInterval?) {
         state.text = text
         state.systemImage = systemImage
 
@@ -68,6 +91,7 @@ final class StatusHUD {
             panel.orderFrontRegardless()
         }
 
+        guard let duration else { return } // sticky: keep showing until updated/hidden
         let work = DispatchWorkItem { [weak self] in self?.fadeOut() }
         dismissWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
@@ -104,7 +128,9 @@ final class StatusHUD {
         let height = max(size.height, 36)
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         let x = screen.frame.midX - width / 2
-        let y = screen.visibleFrame.maxY - height - 8 // just below the menu bar
+        // Panel top sits just under the menu bar; the capsule itself lands ~14px
+        // below it thanks to the transparent shadow padding baked into the view.
+        let y = screen.visibleFrame.maxY - height + 6
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
     }
 

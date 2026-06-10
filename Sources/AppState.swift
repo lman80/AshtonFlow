@@ -602,32 +602,42 @@ final class AppState: ObservableObject, @unchecked Sendable {
         didSet {
             guard oldValue != offlineModeEnabled else { return }
             UserDefaults.standard.set(offlineModeEnabled, forKey: offlineModeEnabledStorageKey)
-            statusHUD.show(offlineModeEnabled ? "Offline · on-device" : "Online",
-                           systemImage: offlineModeEnabled ? "cpu" : "cloud")
             if offlineModeEnabled {
-                // Begin loading/downloading the model the moment it's turned on.
-                prepareLocalModel()
+                // Announce immediately and keep the pill updated through every
+                // phase (preparing → downloading % → loading → ready) so the user
+                // always knows *why* it's busy instead of seeing a bare spinner.
+                prepareLocalModel(announce: true)
+            } else {
+                statusHUD.show("Online", systemImage: "cloud")
             }
         }
     }
 
-    /// Which local Whisper model to use (see `offlineModelOptions`).
+    /// Which local Whisper model the user has selected (see `offlineModelCatalog`).
+    /// Picking a new one downloads it in the background while the current model
+    /// keeps transcribing; it only becomes active once fully downloaded.
     @Published var offlineModelName: String {
         didSet {
             let trimmed = offlineModelName.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed != offlineModelName { offlineModelName = trimmed; return }
             guard oldValue != offlineModelName else { return }
             UserDefaults.standard.set(offlineModelName, forKey: offlineModelNameStorageKey)
-            localModelState = .notLoaded
-            let name = offlineModelName
-            Task { await localTranscriptionService.setModel(name) }
-            statusHUD.show("Switched to \(offlineModelName) model", systemImage: "arrow.triangle.2.circlepath")
-            if offlineModeEnabled { prepareLocalModel() }
+            beginOfflineModelSwitch(to: offlineModelName)
         }
     }
 
     /// UI status of the local model load/download (shown in Settings).
     @Published var localModelState: LocalModelState = .notLoaded
+
+    /// Background download/activation of a newly-picked model (the current model
+    /// keeps serving until this finishes). Drives the picker's inline progress.
+    @Published var modelSwitchState: ModelSwitchState = .idle
+
+    /// The model the on-device engine is actually using right now. May lag the
+    /// picker selection (`offlineModelName`) while a newly-picked model downloads.
+    @Published private(set) var activeOfflineModelName: String = ""
+
+    private var modelSwitchTask: Task<Void, Never>?
 
     /// On-device transcription engine, used when offline.
     let localTranscriptionService: LocalTranscriptionService
@@ -1028,6 +1038,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.screenRecordingEnabled = screenRecordingEnabled
         self.offlineModeEnabled = offlineModeEnabled
         self.offlineModelName = offlineModelName
+        self.activeOfflineModelName = offlineModelName
         self.cleanupModelSelection = cleanupModelSelection
         self.offlineCleanupPrompt = offlineCleanupPrompt
         self.offlineCleanupEnabled = offlineCleanupEnabled
@@ -1269,8 +1280,21 @@ final class AppState: ObservableObject, @unchecked Sendable {
     /// Loads (downloading on first use) the local Whisper model, updating
     /// `localModelState` for the UI. Triggered when Offline mode is turned on or
     /// from the Settings "Download model" button.
-    func prepareLocalModel() {
-        localModelState = .downloading(0)
+    /// Friendly display name for an offline model id (falls back to the raw id).
+    func offlineModelDisplayName(_ id: String) -> String {
+        Self.offlineModelCatalog.first { $0.id == id }?.name ?? id
+    }
+
+    /// Download (if needed) and load the active offline model into memory. When
+    /// `announce` is true, narrate every phase on the status pill so the user
+    /// knows what's happening (preparing → downloading % → loading → ready).
+    func prepareLocalModel(announce: Bool = false) {
+        let downloaded = LocalTranscriptionService.hasDownloadedModel(named: activeOfflineModelName)
+        localModelState = downloaded ? .loading : .downloading(0)
+        if announce {
+            statusHUD.showProgress(downloaded ? "Loading offline model…" : "Preparing offline model…",
+                                   systemImage: "cpu")
+        }
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -1279,15 +1303,96 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         Task { @MainActor in
                             if case .loading = self.localModelState { return } // already past download
                             self.localModelState = .downloading(fraction)
+                            if announce, fraction > 0 {
+                                self.statusHUD.showProgress("Downloading model… \(Int((fraction * 100).rounded()))%",
+                                                            systemImage: "arrow.down.circle")
+                            }
                         }
                     },
                     onLoading: {
-                        Task { @MainActor in self.localModelState = .loading }
+                        Task { @MainActor in
+                            self.localModelState = .loading
+                            if announce { self.statusHUD.showProgress("Loading offline model…", systemImage: "cpu") }
+                        }
                     }
                 )
-                await MainActor.run { self.localModelState = .ready }
+                await MainActor.run {
+                    self.localModelState = .ready
+                    if announce {
+                        self.statusHUD.show("Offline ready · on-device", systemImage: "checkmark.circle.fill", duration: 1.8)
+                    }
+                }
             } catch {
-                await MainActor.run { self.localModelState = .failed(error.localizedDescription) }
+                await MainActor.run {
+                    self.localModelState = .failed(error.localizedDescription)
+                    if announce {
+                        self.statusHUD.show("Offline model unavailable", systemImage: "exclamationmark.triangle.fill", duration: 3)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Switch the offline transcription model. The newly-picked model downloads
+    /// in the background (with progress) while the *current* model keeps
+    /// transcribing, then takes over once it's fully on disk — so you're never
+    /// left without a working model mid-download.
+    func beginOfflineModelSwitch(to name: String) {
+        modelSwitchTask?.cancel()
+
+        // Already the active model and present on disk → just ensure it's loaded.
+        if name == activeOfflineModelName, LocalTranscriptionService.hasDownloadedModel(named: name) {
+            modelSwitchState = .idle
+            if isOfflineActive { prepareLocalModel(announce: true) }
+            return
+        }
+
+        modelSwitchTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                if !LocalTranscriptionService.hasDownloadedModel(named: name) {
+                    await MainActor.run {
+                        self.modelSwitchState = .downloading(model: name, fraction: 0)
+                        if self.isOfflineActive {
+                            self.statusHUD.showProgress("Downloading \(self.offlineModelDisplayName(name)) model…",
+                                                        systemImage: "arrow.down.circle")
+                        }
+                    }
+                    try await LocalTranscriptionService.ensureDownloaded(name) { fraction in
+                        Task { @MainActor in
+                            guard case .downloading = self.modelSwitchState else { return }
+                            self.modelSwitchState = .downloading(model: name, fraction: fraction)
+                            if self.isOfflineActive, fraction > 0 {
+                                self.statusHUD.showProgress("Downloading model… \(Int((fraction * 100).rounded()))%",
+                                                            systemImage: "arrow.down.circle")
+                            }
+                        }
+                    }
+                }
+                if Task.isCancelled { return }
+
+                // Activate: hand the live engine over to the now-downloaded model.
+                await MainActor.run { self.modelSwitchState = .activating(model: name) }
+                await self.localTranscriptionService.setModel(name)
+                await MainActor.run {
+                    self.activeOfflineModelName = name
+                    self.modelSwitchState = .idle
+                    if self.isOfflineActive {
+                        self.localModelState = .notLoaded
+                        self.prepareLocalModel(announce: true)
+                    } else {
+                        self.localModelState = .ready // downloaded; loads on first offline use
+                    }
+                }
+            } catch {
+                if Task.isCancelled { return }
+                await MainActor.run {
+                    self.modelSwitchState = .failed(model: name, message: error.localizedDescription)
+                    if self.isOfflineActive {
+                        self.statusHUD.show("Couldn't download \(self.offlineModelDisplayName(name))",
+                                            systemImage: "exclamationmark.triangle.fill", duration: 3)
+                    }
+                }
             }
         }
     }
@@ -1376,7 +1481,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             if autoOfflineFallbackEnabled, !offlineModeEnabled, Self.isConnectivityError(error) {
                 await MainActor.run {
                     self.autoOfflineActive = true
-                    self.prepareLocalModel()
+                    self.prepareLocalModel(announce: true)
                 }
                 return try await localTranscriptionService.transcribe(fileURL: url)
             }
@@ -3234,7 +3339,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                             await MainActor.run {
                                 self.autoOfflineActive = true
                                 self.statusText = "No cloud connection — using offline"
-                                self.prepareLocalModel()
+                                self.prepareLocalModel(announce: true)
                             }
                             rawTranscript = try await self.localTranscriptionService.transcribe(fileURL: transcriptionFileURL)
                         }

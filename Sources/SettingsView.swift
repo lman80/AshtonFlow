@@ -976,41 +976,69 @@ struct GeneralSettingsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    switch appState.localModelState {
-                    case .notLoaded:
-                        HStack(spacing: 8) {
-                            Button("Download model") { appState.prepareLocalModel() }
-                                .controlSize(.small)
-                            Text("Downloads once (needs internet)")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    case .downloading(let fraction):
-                        Text("Downloading model… \(Int((fraction * 100).rounded()))%")
+                    switch appState.modelSwitchState {
+                    case .downloading(let model, let fraction):
+                        Text("Downloading \(appState.offlineModelDisplayName(model)) model… \(Int((max(fraction, 0) * 100).rounded()))%")
                             .font(.caption.weight(.semibold))
-                        ProgressView(value: fraction)
+                        ProgressView(value: max(fraction, 0))
                             .progressViewStyle(.linear)
                             .frame(maxWidth: 320)
-                        Text("First time only — it runs offline after this.")
+                        Text("Still using your current model until this finishes.")
                             .font(.caption).foregroundStyle(.secondary)
-                    case .loading:
+                    case .activating(let model):
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
-                            Text("Loading model into memory…")
+                            Text("Switching to \(appState.offlineModelDisplayName(model))…")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                    case .ready:
-                        HStack(spacing: 8) {
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                            Text("Model ready — works offline")
-                                .font(.caption).foregroundStyle(.green)
-                        }
-                    case .failed(let message):
+                    case .failed(let model, let message):
                         HStack(alignment: .top, spacing: 8) {
                             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                            Text(message)
-                                .font(.caption).foregroundStyle(.secondary).lineLimit(3)
-                            Button("Retry") { appState.prepareLocalModel() }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Couldn't download \(appState.offlineModelDisplayName(model))")
+                                    .font(.caption.weight(.semibold))
+                                Text(message).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                            }
+                            Button("Retry") { appState.beginOfflineModelSwitch(to: model) }
                                 .controlSize(.small)
+                        }
+                    case .idle:
+                        switch appState.localModelState {
+                        case .notLoaded:
+                            HStack(spacing: 8) {
+                                Button("Download model") { appState.prepareLocalModel(announce: appState.isOfflineActive) }
+                                    .controlSize(.small)
+                                Text("Downloads once (needs internet)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        case .downloading(let fraction):
+                            Text("Downloading model… \(Int((fraction * 100).rounded()))%")
+                                .font(.caption.weight(.semibold))
+                            ProgressView(value: fraction)
+                                .progressViewStyle(.linear)
+                                .frame(maxWidth: 320)
+                            Text("First time only — it runs offline after this.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        case .loading:
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("Loading model into memory…")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        case .ready:
+                            HStack(spacing: 8) {
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                                Text("Model ready — works offline")
+                                    .font(.caption).foregroundStyle(.green)
+                            }
+                        case .failed(let message):
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                                Text(message)
+                                    .font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                                Button("Retry") { appState.prepareLocalModel(announce: appState.isOfflineActive) }
+                                    .controlSize(.small)
+                            }
                         }
                     }
                 }
@@ -1748,6 +1776,22 @@ struct GeneralSettingsView: View {
                         appState.requestScreenCapturePermission()
                     }
                 )
+            }
+
+            Divider()
+                .padding(.vertical, 2)
+
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Setup Guide")
+                    Text("Re-open the first-launch setup (permissions & API key).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Re-run Setup…") {
+                    NotificationCenter.default.post(name: .showSetup, object: nil)
+                }
             }
         }
     }
