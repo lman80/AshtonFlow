@@ -53,6 +53,8 @@ Return only two sentences, no labels, no markdown, no extra commentary.
         return override > 0 ? override : 20
     }
 
+    private var appActivationObserver: NSObjectProtocol?
+
     init(
         apiKey: String,
         baseURL: String = "https://api.groq.com/openai/v1",
@@ -70,6 +72,41 @@ Return only two sentences, no labels, no markdown, no extra commentary.
             ? screenshotMaxDimension
             : AppContextService.defaultScreenshotMaxDimension
         self.screenRecordingEnabled = screenRecordingEnabled
+        setupEnhancedAccessibility()
+    }
+
+    deinit {
+        if let appActivationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(appActivationObserver)
+        }
+    }
+
+    // MARK: - Enhanced (Electron/Chromium) accessibility
+
+    /// Electron/Chromium apps (VS Code, Cursor, Obsidian, Claude, Slack, …) don't
+    /// expose their accessibility tree — including the current text selection —
+    /// until a client asks for it via the `AXManualAccessibility` attribute. We
+    /// turn it on for the frontmost app now and for every app as it activates, so
+    /// Edit Mode can read the highlighted text in those apps. No-op elsewhere.
+    private func setupEnhancedAccessibility() {
+        enableEnhancedAccessibilityForFrontmostApp()
+        appActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            AppContextService.enableEnhancedAccessibility(for: AXUIElementCreateApplication(app.processIdentifier))
+        }
+    }
+
+    private func enableEnhancedAccessibilityForFrontmostApp() {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return }
+        Self.enableEnhancedAccessibility(for: AXUIElementCreateApplication(app.processIdentifier))
+    }
+
+    static func enableEnhancedAccessibility(for appElement: AXUIElement) {
+        AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
     }
 
     private func resolveContextPrompt() -> String {
@@ -88,6 +125,7 @@ Return only two sentences, no labels, no markdown, no extra commentary.
         }
 
         let appElement = AXUIElementCreateApplication(frontmostApp.processIdentifier)
+        Self.enableEnhancedAccessibility(for: appElement)
         return AppSelectionSnapshot(
             appName: frontmostApp.localizedName,
             bundleIdentifier: frontmostApp.bundleIdentifier,
