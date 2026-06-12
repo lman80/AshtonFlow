@@ -44,20 +44,7 @@ enum AnnotationCapture {
     /// backing scale (passed in so this can run off the main thread). Returns PNG
     /// data, or nil if capture failed (e.g. permission missing).
     static func annotatedPNG(displayID: CGDirectDisplayID, screenFrame frame: CGRect, scale: CGFloat, path: [CGPoint], showPath: Bool = false) -> Data? {
-        guard let shot = CGDisplayCreateImage(displayID) else { return nil }
-
-        let pixelW = shot.width
-        let pixelH = shot.height
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        guard let ctx = CGContext(
-            data: nil, width: pixelW, height: pixelH,
-            bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-
-        // CGContext is bottom-left origin, same as AppKit global coords, so the
-        // mapping is a straight translate + scale (no Y flip needed).
-        ctx.draw(shot, in: CGRect(x: 0, y: 0, width: pixelW, height: pixelH))
+        guard let (ctx, _, _) = captureContext(displayID) else { return nil }
 
         let pts = path.map { CGPoint(x: ($0.x - frame.minX) * scale, y: ($0.y - frame.minY) * scale) }
 
@@ -105,9 +92,43 @@ enum AnnotationCapture {
             }
         }
 
+        return pngData(ctx)
+    }
+
+    /// Capture `displayID` and draw a translucent red circle centered on
+    /// `cursorPoint` (global AppKit coords) — manual point-and-shoot capture, for
+    /// when the user presses the capture key instead of circling.
+    static func annotatedPNG(displayID: CGDirectDisplayID, screenFrame frame: CGRect, scale: CGFloat, cursorPoint: CGPoint, radius: CGFloat = 78) -> Data? {
+        guard let (ctx, _, _) = captureContext(displayID) else { return nil }
+        let cx = (cursorPoint.x - frame.minX) * scale
+        let cy = (cursorPoint.y - frame.minY) * scale
+        let r = radius * scale
+        let rect = CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2)
+        ctx.setFillColor(NSColor.systemRed.withAlphaComponent(0.07).cgColor)
+        ctx.fillEllipse(in: rect)
+        ctx.setStrokeColor(NSColor.systemRed.withAlphaComponent(0.55).cgColor)
+        ctx.setLineWidth(max(3, 4 * scale))
+        ctx.strokeEllipse(in: rect)
+        return pngData(ctx)
+    }
+
+    /// Screenshot `displayID` into a fresh bottom-left CGContext (AppKit coords,
+    /// no Y flip needed) ready to draw on. Returns nil if capture failed.
+    private static func captureContext(_ displayID: CGDirectDisplayID) -> (ctx: CGContext, width: Int, height: Int)? {
+        guard let shot = CGDisplayCreateImage(displayID) else { return nil }
+        let w = shot.width, h = shot.height
+        guard let ctx = CGContext(
+            data: nil, width: w, height: h,
+            bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        ctx.draw(shot, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return (ctx, w, h)
+    }
+
+    private static func pngData(_ ctx: CGContext) -> Data? {
         guard let out = ctx.makeImage() else { return nil }
-        let rep = NSBitmapImageRep(cgImage: out)
-        return rep.representation(using: .png, properties: [:])
+        return NSBitmapImageRep(cgImage: out).representation(using: .png, properties: [:])
     }
 
     /// Drops the lead-in "approach" stroke — the contiguous start of the path

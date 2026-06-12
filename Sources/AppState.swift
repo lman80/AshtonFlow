@@ -322,6 +322,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let savedAnnotationCustomShortcutStorageKey = "saved_annotation_custom_shortcut"
     private let annotationSensitivityStorageKey = "annotation_sensitivity"
     private let annotationShowPathStorageKey = "annotation_show_path"
+    private let annotationAutoCaptureStorageKey = "annotation_auto_capture"
+    private let annotationCaptureShortcutStorageKey = "annotation_capture_shortcut"
+    private let savedAnnotationCaptureCustomShortcutStorageKey = "saved_annotation_capture_custom_shortcut"
     private let annotationPreambleStorageKey = "annotation_preamble"
     private let customVocabularyStorageKey = "custom_vocabulary"
     private let transcriptionLanguageStorageKey = "transcription_language"
@@ -578,6 +581,25 @@ final class AppState: ObservableObject, @unchecked Sendable {
     @Published var annotationShowPath: Bool {
         didSet { UserDefaults.standard.set(annotationShowPath, forKey: annotationShowPathStorageKey) }
     }
+
+    /// When on, circling the cursor auto-captures a screenshot (default). Turn it
+    /// off to capture only when you press the manual capture shortcut.
+    @Published var annotationAutoCapture: Bool {
+        didSet { UserDefaults.standard.set(annotationAutoCapture, forKey: annotationAutoCaptureStorageKey) }
+    }
+
+    /// Manual "capture now" shortcut: during a session, snaps a screenshot with a
+    /// circle around the current pointer. Active only while annotating.
+    @Published var annotationCaptureShortcut: ShortcutBinding {
+        didSet { persistShortcut(annotationCaptureShortcut, key: annotationCaptureShortcutStorageKey) }
+    }
+
+    @Published var savedAnnotationCaptureCustomShortcut: ShortcutBinding? {
+        didSet { persistOptionalShortcut(savedAnnotationCaptureCustomShortcut, key: savedAnnotationCaptureCustomShortcutStorageKey) }
+    }
+
+    /// Dedicated tap for the manual capture key — started only during a session.
+    let captureHotkeyManager = HotkeyManager()
 
     @Published var annotationPreamble: String {
         didSet { UserDefaults.standard.set(annotationPreamble, forKey: annotationPreambleStorageKey) }
@@ -1147,6 +1169,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.annotationSensitivity = AnnotationSensitivity(
             rawValue: UserDefaults.standard.string(forKey: "annotation_sensitivity") ?? "") ?? .medium
         self.annotationShowPath = UserDefaults.standard.bool(forKey: "annotation_show_path")
+        self.annotationAutoCapture = UserDefaults.standard.object(forKey: "annotation_auto_capture") == nil
+            ? true
+            : UserDefaults.standard.bool(forKey: "annotation_auto_capture")
+        self.annotationCaptureShortcut = (UserDefaults.standard.data(forKey: "annotation_capture_shortcut")
+            .flatMap { try? JSONDecoder().decode(ShortcutBinding.self, from: $0) }) ?? .disabled
+        self.savedAnnotationCaptureCustomShortcut = UserDefaults.standard.data(forKey: "saved_annotation_capture_custom_shortcut")
+            .flatMap { try? JSONDecoder().decode(ShortcutBinding.self, from: $0) }
         self.annotationPreamble = UserDefaults.standard.string(forKey: "annotation_preamble")
             ?? Self.defaultAnnotationPreamble
         self.isCommandModeEnabled = isCommandModeEnabled

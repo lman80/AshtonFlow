@@ -110,13 +110,46 @@ extension AppState {
 
         isAnnotating = true
         annotationStatusDetail = ""
-        mouseGestureMonitor.start()
-        statusHUD.showProgress("Annotation on — talk & circle the issues", systemImage: "scribble.variable")
+        if annotationAutoCapture {
+            mouseGestureMonitor.start()
+        }
+        startCaptureHotkey()
+        statusHUD.showProgress(
+            annotationAutoCapture
+                ? "Annotation on — talk & circle the issues"
+                : "Annotation on — talk & press your capture key",
+            systemImage: "scribble.variable")
     }
 
-    /// Captured when the user circles the cursor: screenshot the display, draw the
-    /// circle, save it, and remember when it happened (for inline placement).
+    /// Auto-capture (circling): screenshot the display the gesture happened on,
+    /// draw the matched circle/box highlight, and save it.
     func captureAnnotationShot(points: [CGPoint], screen: NSScreen) {
+        let showPath = annotationShowPath
+        recordAnnotationShot(on: screen) { displayID, frame, scale, dest in
+            if let data = AnnotationCapture.annotatedPNG(
+                displayID: displayID, screenFrame: frame, scale: scale, path: points, showPath: showPath) {
+                try? data.write(to: dest)
+            }
+        }
+    }
+
+    /// Manual capture: screenshot whichever display the pointer is on, with a
+    /// circle around the pointer. Triggered by the capture key during a session.
+    func captureAnnotationShotAtCursor() {
+        let cursor = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(cursor) }) ?? NSScreen.main else { return }
+        recordAnnotationShot(on: screen) { displayID, frame, scale, dest in
+            if let data = AnnotationCapture.annotatedPNG(
+                displayID: displayID, screenFrame: frame, scale: scale, cursorPoint: cursor) {
+                try? data.write(to: dest)
+            }
+        }
+    }
+
+    /// Shared bookkeeping for both capture modes: record the shot's time + name,
+    /// update the HUD, then run `render` off the main thread to write the PNG.
+    private func recordAnnotationShot(on screen: NSScreen,
+                                      render: @escaping (CGDirectDisplayID, CGRect, CGFloat, URL) -> Void) {
         guard isAnnotating, let folder = annotationSessionFolder else { return }
         let elapsed = CACurrentMediaTime() - annotationStartMonotonic
         annotationShotCounter += 1
@@ -130,13 +163,45 @@ extension AppState {
         let frame = screen.frame
         let scale = screen.backingScaleFactor
         let dest = folder.appendingPathComponent(fileName)
-        let showPath = annotationShowPath
         DispatchQueue.global(qos: .userInitiated).async {
-            guard let data = AnnotationCapture.annotatedPNG(
-                displayID: displayID, screenFrame: frame, scale: scale, path: points, showPath: showPath
-            ) else { return }
-            try? data.write(to: dest)
+            render(displayID, frame, scale, dest)
         }
+    }
+
+    /// Runs the manual capture key on its own tap, only while a session is live.
+    private func startCaptureHotkey() {
+        guard !annotationCaptureShortcut.isDisabled else { return }
+        captureHotkeyManager.onShortcutEvent = { [weak self] event in
+            DispatchQueue.main.async {
+                if event == .holdActivated { self?.captureAnnotationShotAtCursor() }
+            }
+        }
+        try? captureHotkeyManager.start(
+            configuration: ShortcutConfiguration(hold: annotationCaptureShortcut, toggle: .disabled, copyAgain: .disabled))
+    }
+
+    private func stopCaptureHotkey() {
+        captureHotkeyManager.onShortcutEvent = nil
+        captureHotkeyManager.stop()
+    }
+
+    /// Validate + assign the manual capture shortcut (must not clash with the
+    /// annotation start/stop key or the dictation shortcuts — they can be live
+    /// at the same time).
+    @discardableResult
+    func setAnnotationCaptureShortcut(_ binding: ShortcutBinding) -> String? {
+        let binding = binding.normalizedForStorageMigration()
+        if !binding.isDisabled {
+            if binding == annotationShortcut || binding.conflicts(with: annotationShortcut) {
+                return "This shortcut already starts/stops annotation."
+            }
+            if binding.conflicts(with: holdShortcut) { return "This shortcut is already used by Hold to Talk." }
+            if binding.conflicts(with: toggleShortcut) { return "This shortcut is already used by Tap to Toggle." }
+            if binding.conflicts(with: copyAgainShortcut) { return "This shortcut is already used by Paste Again." }
+        }
+        if binding.isCustom { savedAnnotationCaptureCustomShortcut = binding }
+        annotationCaptureShortcut = binding
+        return nil
     }
 
     func finishAnnotation() {
@@ -146,6 +211,7 @@ extension AppState {
         annotationLatched = false
         annotationPendingHold = false
         mouseGestureMonitor.stop()
+        stopCaptureHotkey()
 
         let shots = annotationShots
         let duration = max(0.1, CACurrentMediaTime() - annotationStartMonotonic)

@@ -11,6 +11,8 @@ struct SuperNotationView: View {
     @State private var selected: AnnotationSession?
     @State private var annotationCapturing = false
     @State private var annotationValidation: String?
+    @State private var captureCapturing = false
+    @State private var captureValidation: String?
     @State private var permissionTick = 0
 
     var body: some View {
@@ -120,18 +122,41 @@ struct SuperNotationView: View {
 
                 Divider()
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Screenshot trigger sensitivity")
-                        .font(.caption.weight(.semibold))
-                    Picker("", selection: $appState.annotationSensitivity) {
-                        ForEach(AnnotationSensitivity.allCases) { level in
-                            Text(level.title).tag(level)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    Text("How much circling it takes to snap a screenshot. Higher is easier to trigger.")
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Auto-capture when you circle the cursor", isOn: $appState.annotationAutoCapture)
+                    Text(appState.annotationAutoCapture
+                        ? "Circle or scribble the cursor over a spot and it snaps a screenshot automatically."
+                        : "Off — screenshots are taken only when you press the capture shortcut below, so you choose exactly where each one goes.")
                         .font(.caption).foregroundStyle(.secondary)
+
+                    if appState.annotationAutoCapture {
+                        Text("Trigger sensitivity")
+                            .font(.caption.weight(.semibold))
+                            .padding(.top, 2)
+                        Picker("", selection: $appState.annotationSensitivity) {
+                            ForEach(AnnotationSensitivity.allCases) { level in
+                                Text(level.title).tag(level)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        Text("How much circling it takes to snap a screenshot. Higher is easier to trigger.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Capture screenshot shortcut")
+                        .font(.caption.weight(.semibold))
+                    Text("Press this during a session to snap a screenshot with a circle around your pointer — choose each one yourself. Works whether or not auto-capture is on.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    captureShortcutRows
+                    if let captureValidation, !captureValidation.isEmpty {
+                        Label(captureValidation, systemImage: "xmark.circle.fill")
+                            .font(.caption).foregroundStyle(.red)
+                    }
                 }
 
                 Divider()
@@ -241,6 +266,34 @@ struct SuperNotationView: View {
             )
         }
         .onChange(of: annotationCapturing) { capturing in
+            if capturing { appState.suspendHotkeyMonitoringForShortcutCapture() }
+            else { appState.resumeHotkeyMonitoringAfterShortcutCapture() }
+        }
+    }
+
+    private var captureShortcutRows: some View {
+        VStack(spacing: 6) {
+            ShortcutPresetRow(
+                title: "Disabled",
+                isSelected: appState.annotationCaptureShortcut.isDisabled,
+                action: { captureValidation = appState.setAnnotationCaptureShortcut(.disabled) }
+            )
+            ForEach(ShortcutPreset.allCases) { preset in
+                ShortcutPresetRow(
+                    title: preset.title,
+                    isSelected: appState.annotationCaptureShortcut == preset.binding,
+                    action: { captureValidation = appState.setAnnotationCaptureShortcut(preset.binding) }
+                )
+            }
+            ShortcutCaptureRow(
+                savedBinding: appState.savedAnnotationCaptureCustomShortcut,
+                isSelected: appState.annotationCaptureShortcut.isCustom,
+                isCapturing: $captureCapturing,
+                onSelectSaved: { binding in captureValidation = appState.setAnnotationCaptureShortcut(binding) },
+                onCapture: { binding in captureValidation = appState.setAnnotationCaptureShortcut(binding) }
+            )
+        }
+        .onChange(of: captureCapturing) { capturing in
             if capturing { appState.suspendHotkeyMonitoringForShortcutCapture() }
             else { appState.resumeHotkeyMonitoringAfterShortcutCapture() }
         }
