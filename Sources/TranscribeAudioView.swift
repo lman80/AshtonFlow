@@ -122,15 +122,26 @@ struct TranscribeAudioView: View {
                         Label("Copy", systemImage: "doc.on.doc")
                     }
                     .controlSize(.small)
-                    Button {
-                        copyToClipboard(appState.meetingNotesPrompt + "\n\n" + text)
-                        flashCopied("Copied with AI prompt — paste into ChatGPT")
+                    Menu {
+                        Button {
+                            copyToClipboard(appState.meetingNotesPrompt + "\n\n" + text)
+                            flashCopied("Copied with the Business prompt — paste into ChatGPT")
+                        } label: {
+                            Label("For Business", systemImage: "building.2")
+                        }
+                        Button {
+                            copyToClipboard(appState.youTubeNotesPrompt + "\n\n" + text)
+                            flashCopied("Copied with the YouTube prompt — paste into ChatGPT")
+                        } label: {
+                            Label("For YouTube", systemImage: "play.rectangle")
+                        }
                     } label: {
                         Label("Copy with AI Prompt", systemImage: "sparkles")
                     }
+                    .menuStyle(.button)
                     .controlSize(.small)
-                    .buttonStyle(.borderedProminent)
-                    .help("Copies the transcript with your meeting-notes prompt on top, ready to paste into ChatGPT.")
+                    .fixedSize()
+                    .help("Copies the transcript with a meeting-notes prompt on top — pick Business or YouTube — ready to paste into ChatGPT.")
                 }
                 ScrollView {
                     Text(text.isEmpty ? "(No speech detected)" : text)

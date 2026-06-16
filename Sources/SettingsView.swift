@@ -722,7 +722,8 @@ struct GeneralSettingsView: View {
                     SettingsCard("Sound Volume", icon: "speaker.wave.2.fill") { soundVolumeSection }
                 case .textOutput:
                     SettingsCard("Text Cleanup", icon: "wand.and.stars") { cleanupSection }
-                    SettingsCard("Meeting Notes Prompt", icon: "list.bullet.clipboard") { meetingNotesPromptSection }
+                    SettingsCard("Business Meeting Notes Prompt", icon: "building.2") { meetingNotesPromptSection }
+                    SettingsCard("YouTube Meeting Notes Prompt", icon: "play.rectangle") { youTubeNotesPromptSection }
                     SettingsCard("Clipboard", icon: "doc.on.clipboard") { clipboardSection }
                     SettingsCard("Output Language", icon: "globe") { outputLanguageSection }
                     SettingsCard("Edit Mode", icon: "pencil") { commandModeSection }
@@ -1414,7 +1415,7 @@ struct GeneralSettingsView: View {
     private var meetingNotesPromptSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Prepended by \"Copy with AI Prompt\" in Transcribe Audio, so you can paste the result into ChatGPT (or any AI) and get meeting notes in your format. The transcription is added at the end automatically.")
+                Text("Used by \"Copy with AI Prompt → For Business\" in Transcribe Audio. Paste the result into ChatGPT to get business notes in your 🏢 format. The transcription is appended automatically.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -1425,6 +1426,29 @@ struct GeneralSettingsView: View {
                 .disabled(appState.meetingNotesPrompt == AppState.defaultMeetingNotesPrompt)
             }
             TextEditor(text: $appState.meetingNotesPrompt)
+                .font(.system(size: 12, design: .monospaced))
+                .frame(minHeight: 160, maxHeight: 320)
+                .padding(6)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.25)))
+        }
+    }
+
+    private var youTubeNotesPromptSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Used by \"Copy with AI Prompt → For YouTube\". Same 🎬 format as your YouTube notes (no finance section, ends with a quote of the day) and appends a full Chinese translation at the bottom. The transcription is appended automatically.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Reset to default") {
+                    appState.youTubeNotesPrompt = AppState.defaultYouTubeNotesPrompt
+                }
+                .controlSize(.small)
+                .disabled(appState.youTubeNotesPrompt == AppState.defaultYouTubeNotesPrompt)
+            }
+            TextEditor(text: $appState.youTubeNotesPrompt)
                 .font(.system(size: 12, design: .monospaced))
                 .frame(minHeight: 160, maxHeight: 320)
                 .padding(6)

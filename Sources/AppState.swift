@@ -414,6 +414,105 @@ final class AppState: ObservableObject, @unchecked Sendable {
     Here is the meeting transcription to convert:
     """
 
+    private let youTubeNotesPromptStorageKey = "youtube_notes_prompt"
+
+    /// YouTube meeting-notes prompt: same 🎬 structure (no finance section), ends
+    /// with "quote of the day", then appends a FULL Chinese translation (headers
+    /// translated, quote kept in English) — matching the user's YouTube notes.
+    static let defaultYouTubeNotesPrompt = """
+    You are an expert assistant for a YouTube creator. Turn the raw meeting transcript at the bottom into clean, structured meeting notes in my exact YouTube format, then append a full Chinese translation.
+
+    # Output Rules
+    1. Output strictly as a Markdown code snippet.
+    2. Tone: punchy and practical — this is about video strategy, editing, hooks, retention, and platforms. Do NOT add a finance/margin section. Bold key terms, tools, and numbers.
+    3. Use the specific emojis for headers and lists shown below.
+    4. Dates: use a date mentioned in the transcript; otherwise write "Undated."
+    5. Identify the speakers (usually Ashton + the editor) and list them under Team.
+    6. After the English notes, append a FULL Chinese (简体中文) translation of the entire note — translate every section, header, and bullet, keep the emojis, but keep the closing quote in English.
+
+    # Required Structure (English first, then Chinese)
+    1. Title: `# 🎬 Meeting Notes: [Main Topic]`
+    2. Metadata lines:
+       - `**📅 Date:** [Date]`
+       - `**👥 Team:** [Names]`
+       - then a `---` rule
+    3. `## 🚀 Executive Summary` — a 2–4 sentence overview of the outcome.
+    4. `## 🗣️ Key Discussion Points` — numbered `### [emoji] 1. Topic` sub-headers; under each, bullets with bolded keys (e.g. `* **Hook:** …`); pull out specifics (numbers, tools like ElevenLabs/CapCut, platforms, video titles).
+    5. `## ✅ Action Plan` — grouped by person as `### 👤 [Name]`, with checkboxes: `- [ ] **[emoji] [Short Task]:** [Description]`.
+    6. Closing quote: `> **quote of the day:** "[memorable quote from the transcript]"`
+    7. Then a `___` separator, then the FULL Chinese translation with translated headers (`## 🚀 执行摘要`, `## 🗣️ 主要讨论点`, `## ✅ 待办事项清单 (Action Plan)`), keeping the emojis. End the Chinese section with `> **今日金句:** "[the same quote, kept in English]"`.
+
+    # Reference Example (match this style)
+    # 🎬 Meeting Notes: Disease Prevention Products Video Review
+
+    **📅 Date:** February 11, 2026
+    **👥 Team:** Ashton (Creator) & Editor
+
+    ---
+
+    ## 🚀 Executive Summary
+    Reviewed the "Disease Prevention Products" video — pacing, audio gaps, and **AI voice** — then pivoted strategy toward **Facebook Reels** for its older, higher-retention audience.
+
+    ## 🗣️ Key Discussion Points
+
+    ### 🎬 1. Video Editing Feedback
+    * **No Silent Gaps:** Audio must overlap or flow continuously.
+    * **AI Voice:** Strong preference for the **ElevenLabs** voice.
+
+    ### 📉 2. Facebook Strategy
+    * **Demographics:** Older audience holds attention longer than Shorts.
+
+    ## ✅ Action Plan
+
+    ### 👤 Editor
+    - [ ] **✂️ Edit fixes:** Remove the silence gap and repetitive narration.
+
+    ### 👤 Ashton
+    - [ ] **🔑 Access:** Investigate giving the editor Facebook page access.
+
+    ---
+
+    > **quote of the day:** "Nothing's ever as bad as it seems, and nothing's ever as good as it seems."
+
+    ___
+    ___
+
+    # 🎬 会议纪要: 疾病预防产品视频审查
+
+    **📅 日期:** 2026年2月11日
+    **👥 团队:** Ashton (创作者) & 剪辑师
+
+    ---
+
+    ## 🚀 执行摘要
+    审查了“疾病预防产品”视频——节奏、音频空白和 **AI 配音**——随后将策略转向 **Facebook Reels**，因其受众年龄更大、留存率更高。
+
+    ## 🗣️ 主要讨论点
+
+    ### 🎬 1. 视频剪辑反馈
+    * **绝无静默:** 音频必须重叠或流畅衔接。
+    * **AI 配音:** 强烈偏好 **ElevenLabs** 配音。
+
+    ### 📉 2. Facebook 策略
+    * **受众统计:** 老年受众比 Shorts 注意力更持久。
+
+    ## ✅ 待办事项清单 (Action Plan)
+
+    ### 👤 剪辑师
+    - [ ] **✂️ 剪辑修正:** 删除静默空白和重复旁白。
+
+    ### 👤 Ashton
+    - [ ] **🔑 权限:** 研究授予剪辑师 Facebook 页面权限。
+
+    ---
+
+    > **今日金句:** "Nothing's ever as bad as it seems, and nothing's ever as good as it seems."
+
+    ---
+
+    Here is the meeting transcription to convert:
+    """
+
     /// Curated small/fast instruct models recommended for offline text cleanup,
     /// downloadable in-app via Ollama. (Reasoning models like qwen3 are excluded —
     /// they "think" instead of returning clean text.)
@@ -830,6 +929,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
         didSet { UserDefaults.standard.set(meetingNotesPrompt, forKey: meetingNotesPromptStorageKey) }
     }
 
+    /// YouTube variant of the meeting-notes prompt (used by "Copy with AI Prompt
+    /// → For YouTube"). Same structure as business but no finance section, ends
+    /// with "quote of the day", and appends a full Chinese translation.
+    @Published var youTubeNotesPrompt: String {
+        didSet { UserDefaults.standard.set(youTubeNotesPrompt, forKey: youTubeNotesPromptStorageKey) }
+    }
+
     /// Which engine/model does offline cleanup: "apple" (built-in) or
     /// "ollama:<model>" (a local Ollama model).
     @Published var cleanupModelSelection: String {
@@ -1141,6 +1247,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let offlineCleanupPrompt = (storedOfflineCleanupPrompt?.isEmpty == false) ? storedOfflineCleanupPrompt! : Self.defaultOfflineCleanupPrompt
         let storedMeetingNotesPrompt = UserDefaults.standard.string(forKey: meetingNotesPromptStorageKey)
         let meetingNotesPrompt = (storedMeetingNotesPrompt?.isEmpty == false) ? storedMeetingNotesPrompt! : Self.defaultMeetingNotesPrompt
+        let storedYouTubeNotesPrompt = UserDefaults.standard.string(forKey: youTubeNotesPromptStorageKey)
+        let youTubeNotesPrompt = (storedYouTubeNotesPrompt?.isEmpty == false) ? storedYouTubeNotesPrompt! : Self.defaultYouTubeNotesPrompt
         let offlineCleanupEnabled = UserDefaults.standard.object(forKey: offlineCleanupEnabledStorageKey) == nil
             ? true
             : UserDefaults.standard.bool(forKey: offlineCleanupEnabledStorageKey)
@@ -1265,6 +1373,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.cleanupModelSelection = cleanupModelSelection
         self.offlineCleanupPrompt = offlineCleanupPrompt
         self.meetingNotesPrompt = meetingNotesPrompt
+        self.youTubeNotesPrompt = youTubeNotesPrompt
         self.offlineCleanupEnabled = offlineCleanupEnabled
         self.onlineCleanupEnabled = onlineCleanupEnabled
         self.autoOfflineFallbackEnabled = autoOfflineFallbackEnabled
