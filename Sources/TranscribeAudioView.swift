@@ -21,6 +21,8 @@ struct TranscribeAudioView: View {
     @State private var fileName: String = ""
     @State private var isTargeted = false
     @State private var usedOffline = false
+    @State private var progress: Double = 0
+    @State private var progressDetail: String = ""
     @State private var currentTask: Task<Void, Never>?
 
     var body: some View {
@@ -90,9 +92,18 @@ struct TranscribeAudioView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-                ProgressView()
-                    .progressViewStyle(.linear)
-                    .frame(maxWidth: .infinity)
+                if isTranscribingPhase, progress > 0 {
+                    ProgressView(value: progress)
+                        .progressViewStyle(.linear)
+                        .frame(maxWidth: .infinity)
+                    Text("\(Int((progress * 100).rounded()))%\(progressDetail.isEmpty ? "" : " · \(progressDetail)")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                        .frame(maxWidth: .infinity)
+                }
             }
 
         case .done(let text):
@@ -138,10 +149,17 @@ struct TranscribeAudioView: View {
         }
     }
 
+    private var isTranscribingPhase: Bool {
+        if case .transcribing = phase { return true }
+        return false
+    }
+
     private var progressLabel: String {
         switch phase {
         case .preparing: return "Extracting audio from \(fileName)…"
-        case .transcribing: return "Transcribing \(fileName) (\(usedOffline ? "on-device" : "cloud"))…"
+        case .transcribing: return usedOffline
+            ? "Transcribing \(fileName) on-device…"
+            : "Transcribing \(fileName) on the cloud…"
         default: return ""
         }
     }
@@ -238,23 +256,42 @@ struct TranscribeAudioView: View {
 
     @MainActor
     private func run(url: URL) async {
-        phase = .preparing
+        progress = 0
+        progressDetail = ""
+        usedOffline = appState.isOfflineActive
         var prepared: PreparedAudio?
-        do {
-            let preparedAudio = try await AudioFilePreparer.prepare(url)
-            prepared = preparedAudio
-            if Task.isCancelled { preparedAudio.cleanup(); return }
 
-            usedOffline = appState.isOfflineActive
-            phase = .transcribing
-            let raw = try await appState.transcribeAudioFile(at: preparedAudio.url)
-            if Task.isCancelled { preparedAudio.cleanup(); return }
+        let onProgress: @Sendable (Double, Int, Int) -> Void = { fraction, done, total in
+            Task { @MainActor in
+                progress = fraction
+                progressDetail = total > 1 ? "part \(done) of \(total)" : ""
+            }
+        }
+
+        do {
+            let raw: String
+            if usedOffline {
+                // On-device engine needs a prepared audio file (extract from video).
+                phase = .preparing
+                let preparedAudio = try await AudioFilePreparer.prepare(url)
+                prepared = preparedAudio
+                if Task.isCancelled { preparedAudio.cleanup(); return }
+                phase = .transcribing
+                raw = try await appState.transcribeAudioFileWithProgress(at: preparedAudio.url, onProgress: onProgress)
+            } else {
+                // Cloud: the chunked transcriber reads the original directly
+                // (splitting long files + extracting audio from video itself), so
+                // there's no slow whole-file pre-extract step.
+                phase = .transcribing
+                raw = try await appState.transcribeAudioFileWithProgress(at: url, onProgress: onProgress)
+            }
+            if Task.isCancelled { prepared?.cleanup(); return }
 
             let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             copyToClipboard(text)
             appState.recordFileTranscription(text: text, fileName: url.lastPathComponent)
             phase = .done(text)
-            preparedAudio.cleanup()
+            prepared?.cleanup()
         } catch is CancellationError {
             prepared?.cleanup()
         } catch {

@@ -1642,6 +1642,36 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// File transcription for the Transcribe Audio window, with progress. Offline
+    /// runs on-device; online splits long files into chunks and transcribes them
+    /// in parallel on the cloud (fast, real progress, no size-limit failures).
+    /// Cloud is NOT silently swapped for the on-device model here — the window is
+    /// for "use the cloud, show me progress", so a real failure surfaces instead
+    /// of quietly grinding the CPU.
+    func transcribeAudioFileWithProgress(
+        at url: URL,
+        onProgress: @escaping @Sendable (Double, Int, Int) -> Void
+    ) async throws -> String {
+        if isOfflineActive {
+            onProgress(0, 0, 1)
+            let text = try await localTranscriptionService.transcribe(fileURL: url)
+            onProgress(1, 1, 1)
+            return text
+        }
+        let apiKey = resolvedTranscriptionAPIKey
+        let baseURL = resolvedTranscriptionBaseURL
+        let model = transcriptionModel
+        let language = resolvedTranscriptionLanguage
+        return try await ChunkedAudioTranscriber.transcribe(
+            fileURL: url,
+            apiKey: apiKey,
+            baseURL: baseURL,
+            model: model,
+            language: language,
+            onProgress: onProgress
+        )
+    }
+
     /// Classifies whether an error looks like a connectivity / region / VPN-block
     /// failure that warrants falling back to offline transcription.
     static func isConnectivityError(_ error: Error) -> Bool {
