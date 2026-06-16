@@ -23,6 +23,7 @@ struct TranscribeAudioView: View {
     @State private var usedOffline = false
     @State private var progress: Double = 0
     @State private var progressDetail: String = ""
+    @State private var copiedMessage: String?
     @State private var currentTask: Task<Void, Never>?
 
     var body: some View {
@@ -108,17 +109,28 @@ struct TranscribeAudioView: View {
 
         case .done(let text):
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
+                HStack(spacing: 8) {
                     Label("Transcribed \(fileName)\(usedOffline ? " · on-device" : "")", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                         .font(.callout)
+                        .lineLimit(1)
                     Spacer()
                     Button {
                         copyToClipboard(text)
+                        flashCopied("Copied transcription")
                     } label: {
                         Label("Copy", systemImage: "doc.on.doc")
                     }
                     .controlSize(.small)
+                    Button {
+                        copyToClipboard(appState.meetingNotesPrompt + "\n\n" + text)
+                        flashCopied("Copied with AI prompt — paste into ChatGPT")
+                    } label: {
+                        Label("Copy with AI Prompt", systemImage: "sparkles")
+                    }
+                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+                    .help("Copies the transcript with your meeting-notes prompt on top, ready to paste into ChatGPT.")
                 }
                 ScrollView {
                     Text(text.isEmpty ? "(No speech detected)" : text)
@@ -133,9 +145,15 @@ struct TranscribeAudioView: View {
                     RoundedRectangle(cornerRadius: 8)
                         .stroke(Color.secondary.opacity(0.25))
                 )
-                Text("Copied to clipboard and saved to History.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if let copiedMessage {
+                    Label(copiedMessage, systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                } else {
+                    Text("Copied to clipboard and saved to History.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
         case .failed(let message):
@@ -304,6 +322,14 @@ struct TranscribeAudioView: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+    }
+
+    private func flashCopied(_ message: String) {
+        copiedMessage = message
+        let token = message
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            if copiedMessage == token { copiedMessage = nil }
+        }
     }
 }
 

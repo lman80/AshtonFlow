@@ -722,6 +722,7 @@ struct GeneralSettingsView: View {
                     SettingsCard("Sound Volume", icon: "speaker.wave.2.fill") { soundVolumeSection }
                 case .textOutput:
                     SettingsCard("Text Cleanup", icon: "wand.and.stars") { cleanupSection }
+                    SettingsCard("Meeting Notes Prompt", icon: "list.bullet.clipboard") { meetingNotesPromptSection }
                     SettingsCard("Clipboard", icon: "doc.on.clipboard") { clipboardSection }
                     SettingsCard("Output Language", icon: "globe") { outputLanguageSection }
                     SettingsCard("Edit Mode", icon: "pencil") { commandModeSection }
@@ -1409,6 +1410,29 @@ struct GeneralSettingsView: View {
     }
 
     // MARK: Audio During Dictation
+
+    private var meetingNotesPromptSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Prepended by \"Copy with AI Prompt\" in Transcribe Audio, so you can paste the result into ChatGPT (or any AI) and get meeting notes in your format. The transcription is added at the end automatically.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Reset to default") {
+                    appState.meetingNotesPrompt = AppState.defaultMeetingNotesPrompt
+                }
+                .controlSize(.small)
+                .disabled(appState.meetingNotesPrompt == AppState.defaultMeetingNotesPrompt)
+            }
+            TextEditor(text: $appState.meetingNotesPrompt)
+                .font(.system(size: 12, design: .monospaced))
+                .frame(minHeight: 160, maxHeight: 320)
+                .padding(6)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.25)))
+        }
+    }
 
     private var cleanupSection: some View {
         VStack(alignment: .leading, spacing: 10) {
