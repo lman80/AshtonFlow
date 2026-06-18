@@ -128,18 +128,22 @@ enum ChunkedAudioTranscriber {
             duration: CMTime(seconds: length, preferredTimescale: 600)
         )
 
-        return try await withCheckedThrowingContinuation { continuation in
-            session.exportAsynchronously {
-                switch session.status {
-                case .completed:
-                    continuation.resume(returning: outputURL)
-                case .cancelled:
-                    continuation.resume(throwing: CancellationError())
-                default:
-                    continuation.resume(throwing: TranscriptionError.audioPreparationFailed(
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                session.exportAsynchronously {
+                    switch session.status {
+                    case .completed:
+                        continuation.resume(returning: outputURL)
+                    case .cancelled:
+                        continuation.resume(throwing: CancellationError())
+                    default:
+                        continuation.resume(throwing: TranscriptionError.audioPreparationFailed(
                         session.error?.localizedDescription ?? "Couldn't split the audio."))
+                    }
                 }
             }
+        } onCancel: {
+            session.cancelExport()
         }
     }
 }

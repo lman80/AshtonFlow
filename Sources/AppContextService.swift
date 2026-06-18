@@ -258,7 +258,8 @@ Return only two sentences, no labels, no markdown, no extra commentary.
         model: String
     ) async -> (activity: String, prompt: String)? {
         do {
-            var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
+            guard let requestURL = URL(string: "\(baseURL)/chat/completions") else { return nil }
+            var request = URLRequest(url: requestURL)
             request.httpMethod = "POST"
             request.timeoutInterval = contextRequestTimeoutSeconds
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")

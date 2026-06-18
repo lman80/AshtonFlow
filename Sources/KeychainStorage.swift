@@ -5,7 +5,8 @@ enum AppSettingsStorage {
     private static let bundleID = Bundle.main.bundleIdentifier ?? "com.zachlatta.freeflow"
 
     private static var storageDirectory: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
         let appName = AppName.displayName
         let dir = appSupport.appendingPathComponent(appName, isDirectory: true)
         if !FileManager.default.fileExists(atPath: dir.path) {
@@ -53,12 +54,14 @@ enum AppSettingsStorage {
     private static func writeSettings(_ dict: [String: String]) {
         guard let data = try? JSONEncoder().encode(dict) else { return }
         let url = settingsFileURL
-        try? data.write(to: url, options: [.atomic])
-        // Restrict to owner-only read/write (0600)
-        try? FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: url.path
-        )
+        do {
+            try data.write(to: url, options: [.atomic])
+            // Restrict to owner-only read/write (0600)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        } catch {
+            // Don't fail silently — a lost write means settings/keys vanish next launch.
+            NSLog("AshtonFlow: failed to persist settings to %@: %@", url.path, error.localizedDescription)
+        }
     }
 
     // MARK: - One-time migration from Keychain

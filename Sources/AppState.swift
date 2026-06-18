@@ -1969,7 +1969,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
 
     static func audioStorageDirectory() -> URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
         let appName = AppName.displayName
         let audioDir = appSupport.appendingPathComponent("\(appName)/audio", isDirectory: true)
         if !FileManager.default.fileExists(atPath: audioDir.path) {
@@ -1989,7 +1990,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
     /// Path: `~/Library/Application Support/FreeFlow/is-recording`
     /// (or `FreeFlow Dev/is-recording` when running the dev bundle).
     static func recordingStateFlagURL() -> URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
         let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "FreeFlow"
         return appSupport.appendingPathComponent("\(appName)/is-recording")
     }

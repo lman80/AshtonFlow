@@ -64,17 +64,26 @@ final class SuperNotationStore {
         return url
     }
 
-    /// Write `prompt.md` + `session.json` into the session's folder.
-    func save(_ session: AnnotationSession) {
+    /// Write `prompt.md` + `session.json` into the session's folder. Returns
+    /// false if persistence failed, so the caller can warn instead of claiming
+    /// success.
+    @discardableResult
+    func save(_ session: AnnotationSession) -> Bool {
         let folder = sessionFolder(for: session)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try? session.promptText.data(using: .utf8)?.write(to: folder.appendingPathComponent("prompt.md"))
-
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        if let data = try? encoder.encode(session) {
-            try? data.write(to: folder.appendingPathComponent("session.json"))
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            if let promptData = session.promptText.data(using: .utf8) {
+                try promptData.write(to: folder.appendingPathComponent("prompt.md"))
+            }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(session)
+            try data.write(to: folder.appendingPathComponent("session.json"))
+            return true
+        } catch {
+            NSLog("AshtonFlow: failed to save SuperNotation %@: %@", session.id, error.localizedDescription)
+            return false
         }
     }
 

@@ -305,15 +305,17 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
             }
             self.activeAudioFile = nil
             self.activeAudioFormat = nil
+            // Null the URL on the SAME queue the buffer callback reads it on, so a
+            // late buffer can't see it cleared mid-write (lost audio / spurious error).
+            if !shouldKeepFile {
+                self.tempFileURL = nil
+            }
         }
 
         defer {
             self.recordedFrameCount = 0
             self.fileWriteErrorLock.withLock { _ in
                 self.fileWriteError = nil
-            }
-            if !shouldKeepFile {
-                self.tempFileURL = nil
             }
         }
 

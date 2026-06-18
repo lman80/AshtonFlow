@@ -6,6 +6,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var setupWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var transcribeAudioWindow: NSWindow?
+    private var setupWindowObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // SuperFeedback: in-app "Send Feedback…" → opens a GitHub Issue (with a
@@ -96,12 +97,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // completeSetup() flips hasCompletedSetup back to true before window.close(),
         // so the !hasCompletedSetup check below correctly skips the restore there.
         if wasCompleted, let window = setupWindow {
-            NotificationCenter.default.addObserver(
+            // Drop any stale observer first, then self-remove inside the block, so
+            // repeated wizard opens never pile up observers (each broke the restore).
+            if let existing = setupWindowObserver {
+                NotificationCenter.default.removeObserver(existing)
+                setupWindowObserver = nil
+            }
+            setupWindowObserver = NotificationCenter.default.addObserver(
                 forName: NSWindow.willCloseNotification,
                 object: window,
                 queue: .main
             ) { [weak self] _ in
                 guard let self = self else { return }
+                if let token = self.setupWindowObserver {
+                    NotificationCenter.default.removeObserver(token)
+                    self.setupWindowObserver = nil
+                }
                 if !self.appState.hasCompletedSetup {
                     self.appState.hasCompletedSetup = true
                     self.appState.startHotkeyMonitoring()

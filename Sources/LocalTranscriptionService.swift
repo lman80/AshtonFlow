@@ -79,6 +79,7 @@ actor LocalTranscriptionService {
         guard !trimmed.isEmpty, trimmed != modelName else { return }
         modelName = trimmed
         whisperKit = nil
+        loadingTask?.cancel()
         loadingTask = nil
     }
 

@@ -274,12 +274,17 @@ extension AppState {
             shots: shots, folderName: sessionID,
             audioFileName: audioURL != nil ? "audio.wav" : nil
         )
-        superNotationStore.save(session)
+        let saved = superNotationStore.save(session)
         reloadSuperNotationSessions()
 
         let n = shots.count
-        statusHUD.show("Prompt copied · \(n) screenshot\(n == 1 ? "" : "s")",
-                       systemImage: "checkmark.circle.fill", duration: 2.6)
+        if saved {
+            statusHUD.show("Prompt copied · \(n) screenshot\(n == 1 ? "" : "s")",
+                           systemImage: "checkmark.circle.fill", duration: 2.6)
+        } else {
+            statusHUD.show("Prompt copied — but couldn't save the session to disk",
+                           systemImage: "exclamationmark.triangle.fill", duration: 3.5)
+        }
     }
 
     // MARK: Prompt assembly

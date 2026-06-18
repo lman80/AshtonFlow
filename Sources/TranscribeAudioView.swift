@@ -399,18 +399,22 @@ private enum AudioFilePreparer {
         session.outputURL = outputURL
         session.outputFileType = .m4a
 
-        return try await withCheckedThrowingContinuation { continuation in
-            session.exportAsynchronously {
-                switch session.status {
-                case .completed:
-                    continuation.resume(returning: outputURL)
-                case .cancelled:
-                    continuation.resume(throwing: CancellationError())
-                default:
-                    let message = session.error?.localizedDescription ?? "The file may have no audio track."
-                    continuation.resume(throwing: AudioPreparationError.extractionFailed(message))
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                session.exportAsynchronously {
+                    switch session.status {
+                    case .completed:
+                        continuation.resume(returning: outputURL)
+                    case .cancelled:
+                        continuation.resume(throwing: CancellationError())
+                    default:
+                        let message = session.error?.localizedDescription ?? "The file may have no audio track."
+                        continuation.resume(throwing: AudioPreparationError.extractionFailed(message))
+                    }
                 }
             }
+        } onCancel: {
+            session.cancelExport()
         }
     }
 }

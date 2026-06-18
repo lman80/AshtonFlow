@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ImageIO
 
 // MARK: - SuperNotation tab
 
@@ -9,6 +10,7 @@ import AppKit
 struct SuperNotationView: View {
     @EnvironmentObject var appState: AppState
     @State private var selected: AnnotationSession?
+    @State private var pendingDelete: AnnotationSession?
     @State private var annotationCapturing = false
     @State private var annotationValidation: String?
     @State private var captureCapturing = false
@@ -26,6 +28,17 @@ struct SuperNotationView: View {
             .padding(24)
         }
         .onAppear { appState.reloadSuperNotationSessions() }
+        .alert("Delete this SuperNotation?",
+               isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+               presenting: pendingDelete) { session in
+            Button("Delete", role: .destructive) {
+                appState.deleteSuperNotation(session)
+                pendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: { _ in
+            Text("This permanently removes its folder, screenshots, and prompt.")
+        }
         .sheet(item: $selected) { session in
             SuperNotationDetailView(session: session)
                 .environmentObject(appState)
@@ -325,7 +338,7 @@ struct SuperNotationView: View {
                                 Button("Copy Prompt") { appState.copySuperNotationPrompt(session) }
                                 Button("Reveal in Finder") { appState.revealSuperNotationFolder(session) }
                                 Divider()
-                                Button("Delete", role: .destructive) { appState.deleteSuperNotation(session) }
+                                Button("Delete", role: .destructive) { pendingDelete = session }
                             }
                     }
                 }
@@ -339,13 +352,14 @@ struct SuperNotationView: View {
 private struct SuperNotationCard: View {
     @EnvironmentObject var appState: AppState
     let session: AnnotationSession
+    @State private var thumbnail: NSImage?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack {
                 Rectangle().fill(Color(nsColor: .controlBackgroundColor))
-                if let first = session.shots.first, let image = loadImage(first) {
-                    Image(nsImage: image)
+                if let thumbnail {
+                    Image(nsImage: thumbnail)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                 } else {
@@ -385,10 +399,30 @@ private struct SuperNotationCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.08)))
         .contentShape(Rectangle())
+        .task(id: session.id) { await loadThumbnail() }
     }
 
-    private func loadImage(_ shot: AnnotationShot) -> NSImage? {
-        NSImage(contentsOf: appState.shotURL(shot, in: session))
+    /// Decode the cover screenshot once, downsampled, off the main thread — so
+    /// scrolling the gallery never blocks on full-resolution PNG decodes.
+    private func loadThumbnail() async {
+        guard thumbnail == nil, let first = session.shots.first else { return }
+        let url = appState.shotURL(first, in: session)
+        let image = await Task.detached(priority: .utility) {
+            Self.downsampledImage(at: url, maxPixel: 480)
+        }.value
+        if !Task.isCancelled { thumbnail = image }
+    }
+
+    private static func downsampledImage(at url: URL, maxPixel: CGFloat) -> NSImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
     }
 
     static let dateFormatter: DateFormatter = {

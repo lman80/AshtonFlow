@@ -375,7 +375,8 @@ Behavior:
     }
 
     private func chatCompletion(system: String, user: String) async throws -> String {
-        var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
+        guard let requestURL = URL(string: "\(baseURL)/chat/completions") else { throw URLError(.badURL) }
+        var request = URLRequest(url: requestURL)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -437,7 +438,8 @@ Behavior:
         customSystemPrompt: String = "",
         outputLanguage: String = ""
     ) async throws -> PostProcessingResult {
-        var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
+        guard let requestURL = URL(string: "\(baseURL)/chat/completions") else { throw URLError(.badURL) }
+        var request = URLRequest(url: requestURL)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -542,7 +544,8 @@ Model: \(model)
         customVocabulary: [String],
         outputLanguage: String = ""
     ) async throws -> PostProcessingResult {
-        var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
+        guard let requestURL = URL(string: "\(baseURL)/chat/completions") else { throw URLError(.badURL) }
+        var request = URLRequest(url: requestURL)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

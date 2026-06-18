@@ -749,6 +749,9 @@ final class UpdateManager: ObservableObject {
             // Run the byte-iteration and file I/O off the main thread
             let mgr = self
             let downloadTask = Task.detached {
+                // Close the handle on every exit path (success, throw, or cancel)
+                // so a failed/cancelled download doesn't leak the file descriptor.
+                defer { try? outputHandle.close() }
                 var receivedBytes = 0
                 let bufferSize = 65_536
                 var buffer = Data()
@@ -780,7 +783,6 @@ final class UpdateManager: ObservableObject {
                     outputHandle.write(buffer)
                     receivedBytes += buffer.count
                 }
-                try outputHandle.close()
             }
 
             try await downloadTask.value
